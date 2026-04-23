@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:youtu.be)",
+      "WebFetch(domain:www.youtube.com)",
+      "Bash(xargs ls *)",
+      "Read(//root/**)",
+      "Bash(env)",
+      "Bash(pip install *)",
+      "Bash(apt-get install *)",
+      "Bash(python3 -m venv /var/projects/llmTrader/.venv)",
+      "Bash(/var/projects/llmTrader/.venv/bin/pip install *)",
+      "Bash(.venv/bin/pytest *)",
+      "Bash(git init *)",
+      "Bash(git config *)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  }
+}
