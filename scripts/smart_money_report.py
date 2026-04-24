@@ -13,12 +13,16 @@ def main():
     parser.add_argument("--politician", "-p", help="Filter by politician name (partial match)")
     parser.add_argument("--days", "-d", type=int, default=7, help="Days back to look (default 7)")
     parser.add_argument("--buy-only", action="store_true", help="Show only buy transactions")
+    parser.add_argument("--source", choices=["auto", "api", "web"], default="auto",
+                        help="Data source: auto (default), api, or web scrape")
     args = parser.parse_args()
 
     print(f"\nFetching last {args.days} days of disclosures" +
-          (f" for '{args.politician}'" if args.politician else "") + "...\n")
+          (f" for '{args.politician}'" if args.politician else "") +
+          f" [source={args.source}]...\n")
 
-    trades = fetch_trades(days_back=args.days, politician_name=args.politician)
+    trades = fetch_trades(days_back=args.days, politician_name=args.politician,
+                          source=args.source)
 
     if args.buy_only:
         trades = [t for t in trades if "buy" in t.get("txType", "").lower()]

@@ -14,7 +14,7 @@ import json
 import argparse
 from datetime import datetime
 
-from core.alpaca import get_account, get_positions, market_buy, get_latest_price
+from core.alpaca import get_account, get_positions, market_buy, get_latest_price, trailing_stop_sell
 from core.logger import load_state, save_state, log_trade, log
 from strategies.smart_money import fetch_trades, fetch_large_trades
 from strategies.wheel import start_wheel
@@ -32,11 +32,16 @@ def main():
     parser = argparse.ArgumentParser(description="AI Capitol Trades analyzer")
     parser.add_argument("--politicians", "-p", nargs="+",
                         help="Filter by politician name (default: watch ALL trades by size)")
-    parser.add_argument("--min-size", type=int, default=50_000,
-                        help="Minimum trade size $ for size-based scan (default: 50000)")
+    parser.add_argument("--min-size", type=int, default=0,
+                        help="Minimum trade size $ for size-based scan (default: 0 = all)")
     parser.add_argument("--days", "-d", type=int, default=7, help="Days of history to scan")
     parser.add_argument("--dry-run", action="store_true",
                         help="Show Claude's decisions without executing trades")
+    parser.add_argument("--source", choices=["auto", "api", "web"], default="auto",
+                        help="Data source: auto (default), api, or web scrape")
+    parser.add_argument("--stop-floor", type=float, default=None,
+                        help="Native Alpaca trailing stop %% after buy (e.g. 5 = 5%%). "
+                             "If omitted, uses polling logic via 'python main.py trailing'")
     args = parser.parse_args()
 
     if args.politicians:
@@ -44,12 +49,14 @@ def main():
         log.info(f"Scanning Capitol Trades for politicians: {', '.join(args.politicians)}")
         raw = []
         for pol in args.politicians:
-            raw.extend(fetch_trades(days_back=args.days, politician_name=pol))
+            raw.extend(fetch_trades(days_back=args.days, politician_name=pol,
+                                    source=args.source))
         buy_signals = [t for t in raw if "buy" in t.get("txType", "").lower()]
     else:
         # Size-based mode — catches important moves regardless of politician identity
         log.info(f"Scanning ALL Capitol Trades ≥ ${args.min_size:,} (last {args.days}d)")
-        buy_signals = fetch_large_trades(min_size=args.min_size, days_back=args.days)
+        buy_signals = fetch_large_trades(min_size=args.min_size, days_back=args.days,
+                                         source=args.source)
 
     log.info(f"{len(buy_signals)} buy signals to analyze")
 
@@ -146,15 +153,20 @@ def main():
         try:
             if strategy == "TRAILING_STOP":
                 market_buy(ticker, shares_to_buy)
+                stop_note = ""
+                if args.stop_floor is not None:
+                    trailing_stop_sell(ticker, shares_to_buy, args.stop_floor)
+                    stop_note = f" + native trailing stop {args.stop_floor}%"
                 log_trade(
                     "AI_BUY_TRAILING", ticker, shares_to_buy, price,
                     f"strategy=TRAILING_STOP confidence={confidence}% "
                     f"pol={politician_name} reasoning={reasoning[:60]}"
+                    + (f" stop_floor={args.stop_floor}%" if args.stop_floor else "")
                 )
                 buying_power -= cost
                 state.setdefault("copied_trades", []).append(trade_key)
                 result.update({"executed": True, "shares": shares_to_buy})
-                print(f"  EXECUTED   : Bought {shares_to_buy} shares @ ${price:.2f}")
+                print(f"  EXECUTED   : Bought {shares_to_buy} shares @ ${price:.2f}{stop_note}")
 
             elif strategy == "WHEEL":
                 wheel_result = start_wheel(ticker, contracts=1)

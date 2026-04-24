@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
+    TrailingStopOrderRequest,
     GetOrdersRequest,
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
@@ -83,6 +84,23 @@ def market_sell(symbol: str, qty: float):
 def close_position(symbol: str):
     """Sell entire position at market."""
     return _trading_client().close_position(symbol)
+
+
+def trailing_stop_sell(symbol: str, qty: float, trail_percent: float):
+    """Place a native Alpaca trailing stop sell order (GTC).
+
+    Executes at the broker level instantly when price drops trail_percent%
+    from its peak — no polling needed.
+    trail_percent: e.g. 5.0 for a 5% trailing stop
+    """
+    order = TrailingStopOrderRequest(
+        symbol=symbol,
+        qty=qty,
+        side=OrderSide.SELL,
+        time_in_force=TimeInForce.GTC,
+        trail_percent=trail_percent,
+    )
+    return _trading_client().submit_order(order)
 
 
 def get_open_orders():
