@@ -19,7 +19,8 @@
       "WebFetch(domain:www.capitoltrades.com)",
       "Bash(curl -s \"https://www.capitoltrades.com/trades\" -H \"User-Agent: Mozilla/5.0 \\(X11; Linux x86_64\\) AppleWebKit/537.36\")",
       "Bash(python3 -c \"import sys,re; html=sys.stdin.read\\(\\); m=re.search\\(r'<script id=\\\\\"__NEXT_DATA__\\\\\"[^>]*>\\(.*?\\)</script>', html, re.DOTALL\\); print\\(m.group\\(1\\)[:3000] if m else 'NOT FOUND'\\)\")",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Skill(schedule)"
     ]
   }
 }
