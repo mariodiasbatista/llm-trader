@@ -32,8 +32,8 @@ def main():
     parser = argparse.ArgumentParser(description="AI Capitol Trades analyzer")
     parser.add_argument("--politicians", "-p", nargs="+",
                         help="Filter by politician name (default: watch ALL trades by size)")
-    parser.add_argument("--min-size", type=int, default=0,
-                        help="Minimum trade size $ for size-based scan (default: 0 = all)")
+    parser.add_argument("--min-disclosure-value", type=int, default=0,
+                        help="Minimum $ value of politician's disclosed trade (default: 0 = all)")
     parser.add_argument("--days", "-d", type=int, default=7, help="Days of history to scan")
     parser.add_argument("--dry-run", action="store_true",
                         help="Show Claude's decisions without executing trades")
@@ -54,8 +54,8 @@ def main():
         buy_signals = [t for t in raw if "buy" in t.get("txType", "").lower()]
     else:
         # Size-based mode — catches important moves regardless of politician identity
-        log.info(f"Scanning ALL Capitol Trades ≥ ${args.min_size:,} (last {args.days}d)")
-        buy_signals = fetch_large_trades(min_size=args.min_size, days_back=args.days,
+        log.info(f"Scanning ALL Capitol Trades ≥ ${args.min_disclosure_value:,} (last {args.days}d)")
+        buy_signals = fetch_large_trades(min_size=args.min_disclosure_value, days_back=args.days,
                                          source=args.source)
 
     log.info(f"{len(buy_signals)} buy signals to analyze")
