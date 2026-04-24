@@ -11,6 +11,7 @@ Two fetch modes:
                            from anyone, not just pre-selected politicians.
 """
 import json
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from core.logger import load_state, save_state, log_trade, log
 
 SETTINGS_FILE = Path(__file__).parent.parent / "config" / "settings.json"
 CAPITOL_TRADES_URL = "https://bff.capitoltrades.com/trades"
+CAPITOL_TRADES_WEB = "https://www.capitoltrades.com/trades"
 
 # Capitol Trades reports size as a dollar range string.
 # We map each range to its midpoint for comparison.
@@ -35,6 +37,23 @@ SIZE_MIDPOINTS = {
     "Over $5,000,000": 7_500_000,
 }
 
+# Maps scraped short-form sizes (e.g. "15K–50K") to API-format strings.
+_SCRAPE_SIZE_MAP = {
+    "1K":   "$1,001 - $15,000",
+    "15K":  "$15,001 - $50,000",
+    "50K":  "$50,001 - $100,000",
+    "100K": "$100,001 - $250,000",
+    "250K": "$250,001 - $500,000",
+    "500K": "$500,001 - $1,000,000",
+    "1M":   "$1,000,001 - $5,000,000",
+    "5M":   "Over $5,000,000",
+}
+
+_SCRAPE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+    "Accept": "text/html,application/xhtml+xml",
+}
+
 
 def _settings() -> dict:
     with open(SETTINGS_FILE) as f:
@@ -46,16 +65,117 @@ def _estimate_size(size_str: str) -> int:
     for label, midpoint in SIZE_MIDPOINTS.items():
         if label.lower() in size_str.lower():
             return midpoint
-    # Try to extract a number if the format is unexpected
-    import re
     nums = re.findall(r"[\d,]+", size_str.replace(",", ""))
     if nums:
         return int(nums[-1])
     return 0
 
 
-def _fetch_raw(page_size: int = 100, page: int = 1) -> list:
-    """Fetch one page of disclosures from Capitol Trades."""
+def _scrape_size_to_api_format(scrape_size: str) -> str:
+    """Convert scraped short size (e.g. '15K–50K') to API-format string."""
+    for key, val in _SCRAPE_SIZE_MAP.items():
+        if scrape_size.startswith(key):
+            return val
+    return scrape_size
+
+
+def _parse_scrape_date(day: str, month_year: str) -> str:
+    """Convert '22 Apr' + '2026' to '2026-04-22'."""
+    try:
+        return datetime.strptime(f"{day} {month_year}", "%d %b %Y").strftime("%Y-%m-%d")
+    except ValueError:
+        return ""
+
+
+def _fetch_raw_scrape(page: int = 1) -> list:
+    """Scrape the Capitol Trades website as a fallback when the API is down."""
+    from bs4 import BeautifulSoup
+
+    try:
+        params = {"page": page} if page > 1 else {}
+        resp = requests.get(
+            CAPITOL_TRADES_WEB,
+            params=params,
+            headers=_SCRAPE_HEADERS,
+            timeout=20,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        log.error(f"Capitol Trades web scrape failed: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    rows = soup.select("tbody tr")
+    trades = []
+
+    for row in rows:
+        try:
+            # Politician
+            pol_link = row.select_one("h2.politician-name a")
+            if not pol_link:
+                continue
+            pol_name = pol_link.get_text(strip=True)
+            pol_href = pol_link.get("href", "")
+            pol_id = pol_href.strip("/").split("/")[-1]
+
+            # Ticker
+            ticker_el = row.select_one("span.issuer-ticker")
+            raw_ticker = ticker_el.get_text(strip=True) if ticker_el else ""
+            ticker = raw_ticker.split(":")[0] if raw_ticker else ""
+
+            # Company
+            issuer_el = row.select_one("h3.q-fieldset.issuer-name a")
+            company = issuer_el.get_text(strip=True) if issuer_el else ""
+
+            # Dates — first two date cells each have a day div and a year div
+            date_cells = row.select("td div.text-center")
+            pub_date = tx_date = ""
+            if len(date_cells) >= 1:
+                parts = [d.get_text(strip=True) for d in date_cells[0].find_all("div")]
+                if len(parts) == 2:
+                    pub_date = _parse_scrape_date(parts[0], parts[1])
+            if len(date_cells) >= 2:
+                parts = [d.get_text(strip=True) for d in date_cells[1].find_all("div")]
+                if len(parts) == 2:
+                    tx_date = _parse_scrape_date(parts[0], parts[1])
+
+            # Transaction type
+            tx_el = row.select_one("span.tx-type")
+            tx_type = tx_el.get_text(strip=True) if tx_el else ""
+
+            # Size (short form like "15K–50K")
+            size_el = row.select_one("span.trade-size span.text-txt-dimmer")
+            size_raw = size_el.get_text(strip=True) if size_el else ""
+            size = _scrape_size_to_api_format(size_raw)
+
+            # Price
+            price_el = row.find(lambda tag: tag.name == "td" and tag.get_text(strip=True).startswith("$"))
+            price_str = price_el.get_text(strip=True).lstrip("$") if price_el else ""
+
+            trades.append({
+                "txDate": tx_date,
+                "publishedDate": pub_date,
+                "txType": tx_type,
+                "size": size,
+                "price": price_str,
+                "politician": {"name": pol_name, "id": pol_id},
+                "asset": {"ticker": ticker, "assetName": company, "assetType": "stock"},
+            })
+        except Exception as e:
+            log.warning(f"Skipping malformed scrape row: {e}")
+            continue
+
+    return trades
+
+
+def _fetch_raw(page_size: int = 100, page: int = 1, source: str = "auto") -> list:
+    """Fetch one page of disclosures.
+
+    source: "auto" (API with web fallback) | "api" (API only) | "web" (scrape only)
+    """
+    if source == "web":
+        return _fetch_raw_scrape(page=page)
+
     params = {
         "pageSize": page_size,
         "page": page,
@@ -67,13 +187,17 @@ def _fetch_raw(page_size: int = 100, page: int = 1) -> list:
         resp.raise_for_status()
         return resp.json().get("data", [])
     except requests.RequestException as e:
-        log.error(f"Capitol Trades fetch failed: {e}")
-        return []
+        if source == "api":
+            log.error(f"Capitol Trades API unavailable: {e}")
+            return []
+        log.warning(f"Capitol Trades API unavailable ({e}), falling back to web scrape")
+        return _fetch_raw_scrape(page=page)
 
 
-def fetch_trades(days_back: int = 7, politician_name: str = None) -> list:
+def fetch_trades(days_back: int = 7, politician_name: str = None,
+                 source: str = "auto") -> list:
     """Pull recent politician stock disclosures, optionally filtered by name."""
-    trades = _fetch_raw()
+    trades = _fetch_raw(source=source)
     cutoff = datetime.now() - timedelta(days=days_back)
 
     recent = []
@@ -95,7 +219,8 @@ def fetch_trades(days_back: int = 7, politician_name: str = None) -> list:
 
 
 def fetch_large_trades(min_size: int = 50_000, days_back: int = 7,
-                       tx_types: tuple = ("buy",)) -> list:
+                       tx_types: tuple = ("buy",),
+                       source: str = "auto") -> list:
     """
     Fetch ALL significant buy disclosures above a dollar threshold,
     regardless of which politician made them.
@@ -107,8 +232,9 @@ def fetch_large_trades(min_size: int = 50_000, days_back: int = 7,
         min_size: Minimum estimated trade value in dollars (default $50K)
         days_back: How many calendar days to look back
         tx_types: Transaction types to include (default: buys only)
+        source: "auto" | "api" | "web"
     """
-    trades = _fetch_raw(page_size=100)
+    trades = _fetch_raw(page_size=100, source=source)
     cutoff = datetime.now() - timedelta(days=days_back)
 
     results = []
