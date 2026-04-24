@@ -26,7 +26,10 @@
   "schedule": {
     "trailing_stop_interval_min": 5,
     "wheel_interval_min": 15,
-    "smart_money_interval_min": 60,
+    "analyze_interval_min": 30,
+    "analyze_days": 2,
+    "analyze_min_disclosure_value": 15000,
+    "analyze_source": "web",
     "market_open": "09:30",
     "market_close": "16:00",
     "timezone": "America/New_York",

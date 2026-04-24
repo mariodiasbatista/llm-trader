@@ -4,6 +4,8 @@ Runs strategy checks only during NYSE trading hours (Mon–Fri 9:30–16:00 ET).
 Provides a daily summary at market close.
 """
 import json
+import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +14,8 @@ import pytz
 import schedule
 
 from core.logger import log
+
+BASE = Path(__file__).parent.parent
 
 SETTINGS_FILE = Path(__file__).parent.parent / "config" / "settings.json"
 NY_TZ = pytz.timezone("America/New_York")
@@ -58,15 +62,27 @@ def _run_wheel():
         log.info(f"  {action}")
 
 
-def _run_smart_money():
-    from strategies.smart_money import check_and_copy
-    log.info("Smart money check...")
-    result = check_and_copy()
-    log.info(
-        f"  {result.get('trades_found', 0)} trades found, "
-        f"{result.get('buy_signals', 0)} buy signals, "
-        f"{len(result.get('actions', []))} copied"
-    )
+def _run_analyze():
+    if not is_market_open():
+        return
+    cfg = _settings()
+    days = cfg.get("analyze_days", 2)
+    min_val = cfg.get("analyze_min_disclosure_value", 15000)
+    source = cfg.get("analyze_source", "web")
+    log.info(f"AI analyze run (days={days} min_disclosure_value={min_val} source={source})...")
+    cmd = [
+        sys.executable,
+        str(BASE / "scripts" / "analyze_and_trade.py"),
+        "--days", str(days),
+        "--min-disclosure-value", str(min_val),
+        "--source", source,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.stdout:
+        for line in result.stdout.strip().splitlines():
+            log.info(f"  {line}")
+    if result.returncode != 0 and result.stderr:
+        log.error(f"  analyze error: {result.stderr[:200]}")
 
 
 def _run_daily_summary():
@@ -100,17 +116,17 @@ def start():
 
     trailing_min = cfg.get("trailing_stop_interval_min", 5)
     wheel_min = cfg.get("wheel_interval_min", 15)
-    smart_money_min = cfg.get("smart_money_interval_min", 60)
+    analyze_min = cfg.get("analyze_interval_min", 30)
     summary_time = cfg.get("summary_time", "16:05")
 
     schedule.every(trailing_min).minutes.do(_run_trailing_stop)
     schedule.every(wheel_min).minutes.do(_run_wheel)
-    schedule.every(smart_money_min).minutes.do(_run_smart_money)
+    schedule.every(analyze_min).minutes.do(_run_analyze)
     schedule.every().day.at(summary_time).do(_run_daily_summary)
 
     log.info(
         f"Scheduler started | trailing={trailing_min}min | "
-        f"wheel={wheel_min}min | smart_money={smart_money_min}min | "
+        f"wheel={wheel_min}min | analyze={analyze_min}min | "
         f"summary={summary_time} ET"
     )
 
