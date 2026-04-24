@@ -16,6 +16,7 @@ from datetime import datetime
 
 from core.alpaca import get_account, get_positions, market_buy, get_latest_price, trailing_stop_sell
 from core.logger import load_state, save_state, log_trade, log
+from core.notifier import is_configured as telegram_configured, send_message, send_trade_approval
 from strategies.smart_money import fetch_trades, fetch_large_trades
 from strategies.wheel import start_wheel
 from agents.claude_advisor import get_recommendation
@@ -140,7 +141,29 @@ def main():
             results.append(result)
             continue
 
-        # Execute the chosen strategy
+        # If Telegram is configured, send for approval and queue — don't execute yet
+        if telegram_configured():
+            state.setdefault("pending_trades", {})[trade_key] = {
+                "ticker": ticker,
+                "strategy": strategy,
+                "confidence": confidence,
+                "reasoning": reasoning,
+                "key_risk": key_risk,
+                "price": price,
+                "politician": politician_name,
+                "position_pct": position_pct,
+                "stop_floor": args.stop_floor,
+            }
+            send_trade_approval(
+                trade_key=trade_key, ticker=ticker, strategy=strategy,
+                confidence=confidence, reasoning=reasoning,
+                price=price, politician=politician_name,
+            )
+            print(f"  [TELEGRAM] : Sent for approval — waiting on your phone")
+            results.append(result)
+            continue
+
+        # No Telegram — execute immediately
         shares_budget = buying_power * position_pct
         shares_to_buy = max(1, int(shares_budget / price))
         cost = shares_to_buy * price

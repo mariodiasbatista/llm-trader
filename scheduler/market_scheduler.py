@@ -39,6 +39,7 @@ def _run_trailing_stop():
     if not is_market_open():
         return
     from strategies.trailing_stop import check_and_update
+    from core.notifier import send_stop_alert, send_ladder_alert
     log.info("Trailing stop check...")
     result = check_and_update()
     checked = len(result["checked"])
@@ -47,8 +48,13 @@ def _run_trailing_stop():
     msg = f"Checked {checked} positions"
     if stopped:
         msg += f" | STOPPED OUT: {', '.join(stopped)}"
+        for item in result["checked"]:
+            if item["symbol"] in stopped:
+                send_stop_alert(item["symbol"], item["price"], item["floor"])
     if laddered:
         msg += f" | Ladder buys: {len(laddered)}"
+        for item in laddered:
+            send_ladder_alert(item["symbol"], item["qty"], item["price"], 0)
     log.info(msg)
 
 
@@ -83,6 +89,90 @@ def _run_analyze():
             log.info(f"  {line}")
     if result.returncode != 0 and result.stderr:
         log.error(f"  analyze error: {result.stderr[:200]}")
+
+
+def _poll_telegram():
+    """Check Telegram for approve/skip callbacks and execute pending trades."""
+    from core.notifier import poll_approvals, send_message, is_configured
+    from core.alpaca import get_account, get_latest_price, market_buy
+    from core.logger import load_state, save_state, log_trade
+    from strategies.trailing_stop import check_and_update as trailing_check
+
+    if not is_configured():
+        return
+
+    approvals = poll_approvals()
+    if not approvals:
+        return
+
+    state = load_state()
+    pending = state.get("pending_trades", {})
+    acct = get_account()
+    buying_power = float(acct.buying_power)
+
+    for decision in approvals:
+        action = decision["action"]
+        trade_key = decision["trade_key"]
+        trade = pending.pop(trade_key, None)
+
+        if not trade:
+            log.warning(f"Telegram callback for unknown trade_key: {trade_key}")
+            continue
+
+        ticker = trade["ticker"]
+        strategy = trade["strategy"]
+
+        if action == "skip":
+            log.info(f"[{ticker}] Skipped via Telegram")
+            state.setdefault("copied_trades", []).append(trade_key)
+            continue
+
+        # Approved — re-fetch live price and execute
+        try:
+            price = get_latest_price(ticker)
+            position_pct = trade.get("position_pct", 0.05)
+            stop_floor = trade.get("stop_floor")
+            shares = max(1, int(buying_power * position_pct / price))
+            cost = shares * price
+
+            if buying_power < cost:
+                msg = f"⚠️ Insufficient buying power for `{ticker}` (need ${cost:,.0f}, have ${buying_power:,.0f})"
+                log.warning(msg)
+                send_message(msg)
+                continue
+
+            if strategy == "TRAILING_STOP":
+                from core.alpaca import trailing_stop_sell
+                market_buy(ticker, shares)
+                if stop_floor is not None:
+                    trailing_stop_sell(ticker, shares, stop_floor)
+                log_trade(
+                    "AI_BUY_TRAILING", ticker, shares, price,
+                    f"strategy=TRAILING_STOP approved_via=telegram"
+                    + (f" stop_floor={stop_floor}%" if stop_floor else "")
+                )
+                buying_power -= cost
+                state.setdefault("copied_trades", []).append(trade_key)
+                send_message(f"✅ *Bought* `{ticker}` — {shares} shares @ ${price:.2f}")
+                log.info(f"[{ticker}] Telegram-approved TRAILING_STOP executed")
+
+            elif strategy == "WHEEL":
+                from strategies.wheel import start_wheel
+                result = start_wheel(ticker, contracts=1)
+                log_trade(
+                    "AI_START_WHEEL", ticker, 1, price,
+                    f"strategy=WHEEL approved_via=telegram put_strike={result['put_strike']}"
+                )
+                state.setdefault("copied_trades", []).append(trade_key)
+                send_message(f"✅ *Wheel started* `{ticker}` — put @ ${result['put_strike']:.2f}")
+                log.info(f"[{ticker}] Telegram-approved WHEEL executed")
+
+        except Exception as e:
+            log.error(f"[{ticker}] Telegram-approved execution failed: {e}")
+            send_message(f"❌ Execution failed for `{ticker}`: {e}")
+
+    state["pending_trades"] = pending
+    save_state(state)
 
 
 def _run_daily_summary():
@@ -123,12 +213,17 @@ def start():
     schedule.every(wheel_min).minutes.do(_run_wheel)
     schedule.every(analyze_min).minutes.do(_run_analyze)
     schedule.every().day.at(summary_time).do(_run_daily_summary)
+    schedule.every(30).seconds.do(_poll_telegram)
 
+    from core.notifier import is_configured, send_message
+    telegram_status = "enabled" if is_configured() else "not configured"
     log.info(
         f"Scheduler started | trailing={trailing_min}min | "
         f"wheel={wheel_min}min | analyze={analyze_min}min | "
-        f"summary={summary_time} ET"
+        f"summary={summary_time} ET | telegram={telegram_status}"
     )
+    if is_configured():
+        send_message("🚀 *LLM Trader started*\nScheduler is running.")
 
     while True:
         schedule.run_pending()
