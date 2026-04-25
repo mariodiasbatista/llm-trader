@@ -12,6 +12,26 @@ _TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 # Tracks the last processed Telegram update ID to avoid replaying callbacks
 _LAST_UPDATE_ID = 0
 
+# 0=off  1=debug (all, incl. API calls)  2=info/default  3=error only
+_telegram_log_level: int = 2
+
+LEVEL_LEGEND = {
+    0: "off — no Telegram messages",
+    1: "debug — everything including API calls",
+    2: "info — scheduler steps and trades (default)",
+    3: "error — warnings and errors only",
+}
+
+
+def set_log_level(level: int) -> None:
+    global _telegram_log_level
+    _telegram_log_level = max(0, min(3, level))
+    log.info(f"Telegram log level → {_telegram_log_level} ({LEVEL_LEGEND[_telegram_log_level]})")
+
+
+def get_log_level() -> int:
+    return _telegram_log_level
+
 
 def _cfg() -> dict:
     try:
@@ -34,13 +54,18 @@ def is_configured() -> bool:
 
 
 def _post(method: str, payload: dict) -> dict:
+    if _telegram_log_level == 1:
+        log.debug(f"[telegram] → {method} {payload}")
     try:
         resp = requests.post(
             _TELEGRAM_API.format(token=_token(), method=method),
             json=payload,
             timeout=10,
         )
-        return resp.json()
+        result = resp.json()
+        if _telegram_log_level == 1:
+            log.debug(f"[telegram] ← {result}")
+        return result
     except Exception as e:
         log.warning(f"Telegram API error ({method}): {e}")
         return {}
@@ -54,6 +79,25 @@ def send_message(text: str) -> None:
         "text": text,
         "parse_mode": "Markdown",
     })
+
+
+def tlog(message: str, severity: int = 2) -> None:
+    """Log locally and forward to Telegram when severity meets the active level.
+
+    severity: 1=debug, 2=info, 3=error
+    level setting: 0=off, 1+=debug, 2+=info, 3+=error only
+    A message is sent to Telegram when: level != 0 and severity >= level
+    """
+    if severity == 1:
+        log.debug(message)
+    elif severity >= 3:
+        log.error(message)
+    else:
+        log.info(message)
+    if _telegram_log_level == 0:
+        return
+    if severity >= _telegram_log_level:
+        send_message(message)
 
 
 def send_trade_approval(trade_key: str, ticker: str, strategy: str,
@@ -90,13 +134,42 @@ def send_ladder_alert(symbol: str, qty: int, price: float, drop_pct: float) -> N
 
 
 def send_summary(text: str) -> None:
+    """Send the daily summary — respects log level (info and above)."""
+    if _telegram_log_level == 0 or _telegram_log_level > 2:
+        return
     send_message(f"📊 *Daily Summary*\n\n{text}")
 
 
+def _handle_command(text: str) -> None:
+    """Dispatch /loglevel and /setlevel N commands received via Telegram."""
+    cmd = text.strip().split()
+    if cmd[0] == "/loglevel":
+        lines = ["*Telegram Log Levels*"]
+        for lvl, desc in LEVEL_LEGEND.items():
+            marker = " ← active" if lvl == _telegram_log_level else ""
+            lines.append(f"`{lvl}` — {desc}{marker}")
+        lines.append("\nUse `/setlevel N` to change\\.")
+        send_message("\n".join(lines))
+
+    elif cmd[0] == "/setlevel":
+        if len(cmd) == 2 and cmd[1].isdigit():
+            new_level = int(cmd[1])
+            if 0 <= new_level <= 3:
+                set_log_level(new_level)
+                send_message(
+                    f"Log level set to `{new_level}` — {LEVEL_LEGEND[new_level]}"
+                )
+            else:
+                send_message("Invalid level. Use 0–3. Send /loglevel for the legend.")
+        else:
+            send_message("Usage: `/setlevel N` where N is 0–3. Send /loglevel for legend.")
+
+
 def poll_approvals() -> list[dict]:
-    """
-    Poll Telegram for pending callback button presses.
-    Returns list of dicts: [{"action": "approve"|"skip", "trade_key": "..."}]
+    """Poll Telegram for pending callback button presses and text commands.
+
+    Returns list of approval dicts: [{"action": "approve"|"skip", "trade_key": "..."}]
+    Text commands (/loglevel, /setlevel N) are handled as side-effects.
     """
     global _LAST_UPDATE_ID
     if not is_configured():
@@ -105,12 +178,22 @@ def poll_approvals() -> list[dict]:
     resp = _post("getUpdates", {
         "offset": _LAST_UPDATE_ID + 1,
         "timeout": 0,
-        "allowed_updates": ["callback_query"],
+        "allowed_updates": ["callback_query", "message"],
     })
 
     results = []
     for update in resp.get("result", []):
         _LAST_UPDATE_ID = max(_LAST_UPDATE_ID, update["update_id"])
+
+        # Handle text commands
+        msg = update.get("message")
+        if msg:
+            text = msg.get("text", "").strip()
+            if text.startswith("/"):
+                _handle_command(text)
+            continue
+
+        # Handle inline button callbacks (approve/skip)
         cb = update.get("callback_query")
         if not cb:
             continue

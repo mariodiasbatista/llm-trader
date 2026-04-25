@@ -3,6 +3,18 @@ import json
 from pathlib import Path
 from datetime import datetime, timedelta
 
+from core.logger import log
+
+
+def _debug(msg: str) -> None:
+    """Log at debug severity to Telegram when level=1."""
+    try:
+        from core.notifier import tlog
+        tlog(msg, 1)
+    except Exception:
+        log.debug(msg)
+
+
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
@@ -44,11 +56,18 @@ def _data_client() -> StockHistoricalDataClient:
 
 
 def get_account():
-    return _trading_client().get_account()
+    acct = _trading_client().get_account()
+    _debug(
+        f"[alpaca] account: equity=${float(acct.equity):,.2f} "
+        f"cash=${float(acct.cash):,.2f} bp=${float(acct.buying_power):,.2f}"
+    )
+    return acct
 
 
 def get_positions():
-    return _trading_client().get_all_positions()
+    positions = _trading_client().get_all_positions()
+    _debug(f"[alpaca] positions: {[p.symbol for p in positions]}")
+    return positions
 
 
 def get_position(symbol: str):
@@ -62,23 +81,29 @@ def get_position(symbol: str):
 
 
 def market_buy(symbol: str, qty: float):
+    _debug(f"[alpaca] market_buy {symbol} x{qty}")
     order = MarketOrderRequest(
         symbol=symbol,
         qty=qty,
         side=OrderSide.BUY,
         time_in_force=TimeInForce.DAY,
     )
-    return _trading_client().submit_order(order)
+    result = _trading_client().submit_order(order)
+    _debug(f"[alpaca] order submitted id={result.id} status={result.status}")
+    return result
 
 
 def market_sell(symbol: str, qty: float):
+    _debug(f"[alpaca] market_sell {symbol} x{qty}")
     order = MarketOrderRequest(
         symbol=symbol,
         qty=qty,
         side=OrderSide.SELL,
         time_in_force=TimeInForce.DAY,
     )
-    return _trading_client().submit_order(order)
+    result = _trading_client().submit_order(order)
+    _debug(f"[alpaca] order submitted id={result.id} status={result.status}")
+    return result
 
 
 def close_position(symbol: str):
@@ -137,7 +162,9 @@ def get_latest_price(symbol: str) -> float:
     quote = _data_client().get_stock_latest_quote(req)
     ask = quote[symbol].ask_price
     bid = quote[symbol].bid_price
-    return float((ask + bid) / 2) if ask and bid else float(ask or bid)
+    price = float((ask + bid) / 2) if ask and bid else float(ask or bid)
+    _debug(f"[alpaca] {symbol} price=${price:.2f} (ask={ask} bid={bid})")
+    return price
 
 
 def get_bars(symbol: str, days: int = 30):

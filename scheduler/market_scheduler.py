@@ -14,6 +14,7 @@ import pytz
 import schedule
 
 from core.logger import log
+from core.notifier import tlog, get_log_level, LEVEL_LEGEND
 
 BASE = Path(__file__).parent.parent
 
@@ -40,7 +41,7 @@ def _run_trailing_stop():
         return
     from strategies.trailing_stop import check_and_update
     from core.notifier import send_stop_alert, send_ladder_alert
-    log.info("Trailing stop check...")
+    tlog("Trailing stop check...", 2)
     result = check_and_update()
     checked = len(result["checked"])
     stopped = result["stopped_out"]
@@ -55,17 +56,17 @@ def _run_trailing_stop():
         msg += f" | Ladder buys: {len(laddered)}"
         for item in laddered:
             send_ladder_alert(item["symbol"], item["qty"], item["price"], 0)
-    log.info(msg)
+    tlog(msg, 2)
 
 
 def _run_wheel():
     if not is_market_open():
         return
     from strategies.wheel import check_and_manage
-    log.info("Wheel check...")
+    tlog("Wheel check...", 2)
     result = check_and_manage()
     for action in result.get("actions", []):
-        log.info(f"  {action}")
+        tlog(f"  {action}", 2)
 
 
 def _run_analyze():
@@ -75,7 +76,7 @@ def _run_analyze():
     days = cfg.get("analyze_days", 2)
     min_val = cfg.get("analyze_min_disclosure_value", 15000)
     source = cfg.get("analyze_source", "web")
-    log.info(f"AI analyze run (days={days} min_disclosure_value={min_val} source={source})...")
+    tlog(f"AI analyze run (days={days} min_val=${min_val:,} source={source})...", 2)
     cmd = [
         sys.executable,
         str(BASE / "scripts" / "analyze_and_trade.py"),
@@ -86,13 +87,13 @@ def _run_analyze():
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.stdout:
         for line in result.stdout.strip().splitlines():
-            log.info(f"  {line}")
+            tlog(f"  {line}", 1)  # debug — full subprocess output
     if result.returncode != 0 and result.stderr:
-        log.error(f"  analyze error: {result.stderr[:200]}")
+        tlog(f"analyze error: {result.stderr[:200]}", 3)
 
 
 def _poll_telegram():
-    """Check Telegram for approve/skip callbacks and execute pending trades."""
+    """Check Telegram for approve/skip callbacks and text commands, then execute pending trades."""
     from core.notifier import poll_approvals, send_message, is_configured
     from core.alpaca import get_account, get_latest_price, market_buy
     from core.logger import load_state, save_state, log_trade
@@ -116,14 +117,14 @@ def _poll_telegram():
         trade = pending.pop(trade_key, None)
 
         if not trade:
-            log.warning(f"Telegram callback for unknown trade_key: {trade_key}")
+            tlog(f"Telegram callback for unknown trade_key: {trade_key}", 3)
             continue
 
         ticker = trade["ticker"]
         strategy = trade["strategy"]
 
         if action == "skip":
-            log.info(f"[{ticker}] Skipped via Telegram")
+            tlog(f"[{ticker}] Skipped via Telegram", 2)
             state.setdefault("copied_trades", []).append(trade_key)
             continue
 
@@ -136,9 +137,9 @@ def _poll_telegram():
             cost = shares * price
 
             if buying_power < cost:
-                msg = f"⚠️ Insufficient buying power for `{ticker}` (need ${cost:,.0f}, have ${buying_power:,.0f})"
-                log.warning(msg)
-                send_message(msg)
+                msg = f"Insufficient buying power for `{ticker}` (need ${cost:,.0f}, have ${buying_power:,.0f})"
+                tlog(msg, 3)
+                send_message(f"⚠️ {msg}")
                 continue
 
             if strategy == "TRAILING_STOP":
@@ -154,7 +155,7 @@ def _poll_telegram():
                 buying_power -= cost
                 state.setdefault("copied_trades", []).append(trade_key)
                 send_message(f"✅ *Bought* `{ticker}` — {shares} shares @ ${price:.2f}")
-                log.info(f"[{ticker}] Telegram-approved TRAILING_STOP executed")
+                tlog(f"[{ticker}] Telegram-approved TRAILING_STOP executed", 2)
 
             elif strategy == "WHEEL":
                 from strategies.wheel import start_wheel
@@ -165,10 +166,10 @@ def _poll_telegram():
                 )
                 state.setdefault("copied_trades", []).append(trade_key)
                 send_message(f"✅ *Wheel started* `{ticker}` — put @ ${result['put_strike']:.2f}")
-                log.info(f"[{ticker}] Telegram-approved WHEEL executed")
+                tlog(f"[{ticker}] Telegram-approved WHEEL executed", 2)
 
         except Exception as e:
-            log.error(f"[{ticker}] Telegram-approved execution failed: {e}")
+            tlog(f"[{ticker}] Telegram-approved execution failed: {e}", 3)
             send_message(f"❌ Execution failed for `{ticker}`: {e}")
 
     state["pending_trades"] = pending
@@ -178,6 +179,7 @@ def _poll_telegram():
 def _run_daily_summary():
     from core.alpaca import get_account, get_positions
     from core.logger import load_state
+    from core.notifier import send_summary
     acct = get_account()
     positions = get_positions()
     state = load_state()
@@ -189,6 +191,7 @@ def _run_daily_summary():
     log.info(f"  Cash      : ${float(acct.cash):>12,.2f}")
     log.info(f"  Day P&L   : ${day_pnl:>+12,.2f}")
     log.info(f"  Positions : {len(positions)}")
+    pos_lines = []
     for p in positions:
         floor = state["positions"].get(p.symbol, {}).get("stop_floor")
         floor_str = f"  floor=${floor:.2f}" if floor else ""
@@ -197,7 +200,23 @@ def _run_daily_summary():
             f"P&L ${float(p.unrealized_pl):>+9.2f} "
             f"({float(p.unrealized_plpc)*100:>+5.1f}%){floor_str}"
         )
+        pos_lines.append(
+            f"`{p.symbol}` {p.qty}sh  "
+            f"P&L ${float(p.unrealized_pl):+.2f} ({float(p.unrealized_plpc)*100:+.1f}%){floor_str}"
+        )
     log.info("=" * 55)
+
+    # Send compact summary to Telegram — send_summary respects log level
+    telegram_text = (
+        f"*{datetime.now(NY_TZ).strftime('%Y-%m-%d')}*\n"
+        f"Portfolio: ${float(acct.portfolio_value):,.2f}\n"
+        f"Cash: ${float(acct.cash):,.2f}\n"
+        f"Day P&L: ${day_pnl:+,.2f}\n"
+        f"Positions: {len(positions)}"
+    )
+    if pos_lines:
+        telegram_text += "\n" + "\n".join(pos_lines)
+    send_summary(telegram_text)
 
 
 def start():
@@ -217,13 +236,19 @@ def start():
 
     from core.notifier import is_configured, send_message
     telegram_status = "enabled" if is_configured() else "not configured"
-    log.info(
+    tlog(
         f"Scheduler started | trailing={trailing_min}min | "
         f"wheel={wheel_min}min | analyze={analyze_min}min | "
-        f"summary={summary_time} ET | telegram={telegram_status}"
+        f"summary={summary_time} ET | telegram={telegram_status} | "
+        f"loglevel={get_log_level()}",
+        2,
     )
     if is_configured():
-        send_message("🚀 *LLM Trader started*\nScheduler is running.")
+        send_message(
+            f"🚀 *LLM Trader started*\n"
+            f"Scheduler running. Log level: `{get_log_level()}` — {LEVEL_LEGEND[get_log_level()]}\n"
+            f"Send /loglevel to see options."
+        )
 
     while True:
         schedule.run_pending()

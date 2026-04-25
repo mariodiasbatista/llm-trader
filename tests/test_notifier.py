@@ -221,3 +221,145 @@ class TestPollApprovals:
         mock_post.return_value = {"result": []}
         from core.notifier import poll_approvals
         assert poll_approvals() == []
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier._post")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_loglevel_command_sends_legend(self, mock_cfg, mock_post, mock_send):
+        import core.notifier as notifier
+        notifier._LAST_UPDATE_ID = 0
+        mock_post.return_value = {"result": [{
+            "update_id": 10,
+            "message": {"text": "/loglevel"},
+        }]}
+        from core.notifier import poll_approvals
+        results = poll_approvals()
+        assert results == []
+        mock_send.assert_called_once()
+        text = mock_send.call_args[0][0]
+        assert "0" in text and "1" in text and "2" in text and "3" in text
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier._post")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_setlevel_command_changes_level(self, mock_cfg, mock_post, mock_send):
+        import core.notifier as notifier
+        notifier._LAST_UPDATE_ID = 0
+        notifier._telegram_log_level = 2
+        mock_post.return_value = {"result": [{
+            "update_id": 11,
+            "message": {"text": "/setlevel 1"},
+        }]}
+        from core.notifier import poll_approvals, get_log_level
+        results = poll_approvals()
+        assert results == []
+        assert get_log_level() == 1
+        notifier._telegram_log_level = 2  # reset
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier._post")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_setlevel_invalid_sends_error(self, mock_cfg, mock_post, mock_send):
+        import core.notifier as notifier
+        notifier._LAST_UPDATE_ID = 0
+        mock_post.return_value = {"result": [{
+            "update_id": 12,
+            "message": {"text": "/setlevel 9"},
+        }]}
+        from core.notifier import poll_approvals
+        poll_approvals()
+        mock_send.assert_called_once()
+        assert "Invalid" in mock_send.call_args[0][0]
+
+
+# ── tlog ──────────────────────────────────────────────────────────────────────
+
+class TestTlog:
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_info_sent_at_level_2(self, mock_cfg, mock_send):
+        import core.notifier as notifier
+        notifier._telegram_log_level = 2
+        from core.notifier import tlog
+        tlog("flow step", 2)
+        mock_send.assert_called_once_with("flow step")
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_debug_not_sent_at_level_2(self, mock_cfg, mock_send):
+        import core.notifier as notifier
+        notifier._telegram_log_level = 2
+        from core.notifier import tlog
+        tlog("debug detail", 1)
+        mock_send.assert_not_called()
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_debug_sent_at_level_1(self, mock_cfg, mock_send):
+        import core.notifier as notifier
+        notifier._telegram_log_level = 1
+        from core.notifier import tlog
+        tlog("api call", 1)
+        mock_send.assert_called_once_with("api call")
+        notifier._telegram_log_level = 2
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_nothing_sent_at_level_0(self, mock_cfg, mock_send):
+        import core.notifier as notifier
+        notifier._telegram_log_level = 0
+        from core.notifier import tlog
+        tlog("anything", 2)
+        mock_send.assert_not_called()
+        notifier._telegram_log_level = 2
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_error_sent_at_level_3(self, mock_cfg, mock_send):
+        import core.notifier as notifier
+        notifier._telegram_log_level = 3
+        from core.notifier import tlog
+        tlog("boom", 3)
+        mock_send.assert_called_once_with("boom")
+        notifier._telegram_log_level = 2
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_info_not_sent_at_level_3(self, mock_cfg, mock_send):
+        import core.notifier as notifier
+        notifier._telegram_log_level = 3
+        from core.notifier import tlog
+        tlog("flow step", 2)
+        mock_send.assert_not_called()
+        notifier._telegram_log_level = 2
+
+
+# ── set_log_level / get_log_level ─────────────────────────────────────────────
+
+class TestLogLevel:
+    def test_default_is_2(self):
+        import core.notifier as notifier
+        notifier._telegram_log_level = 2
+        from core.notifier import get_log_level
+        assert get_log_level() == 2
+
+    def test_set_clamps_below_0(self):
+        from core.notifier import set_log_level, get_log_level
+        import core.notifier as notifier
+        set_log_level(-5)
+        assert get_log_level() == 0
+        notifier._telegram_log_level = 2
+
+    def test_set_clamps_above_3(self):
+        from core.notifier import set_log_level, get_log_level
+        import core.notifier as notifier
+        set_log_level(99)
+        assert get_log_level() == 3
+        notifier._telegram_log_level = 2
+
+    def test_set_valid_level(self):
+        from core.notifier import set_log_level, get_log_level
+        import core.notifier as notifier
+        set_log_level(1)
+        assert get_log_level() == 1
+        notifier._telegram_log_level = 2
