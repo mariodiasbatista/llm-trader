@@ -23,14 +23,35 @@ LEVEL_LEGEND = {
 }
 
 
+_SETTINGS_FILE = Path(__file__).parent.parent / "config" / "settings.json"
+
+
 def set_log_level(level: int) -> None:
     global _telegram_log_level
     _telegram_log_level = max(0, min(3, level))
     log.info(f"Telegram log level → {_telegram_log_level} ({LEVEL_LEGEND[_telegram_log_level]})")
+    try:
+        settings = json.loads(_SETTINGS_FILE.read_text())
+        settings["telegram_log_level"] = _telegram_log_level
+        _SETTINGS_FILE.write_text(json.dumps(settings, indent=2))
+    except Exception as e:
+        log.warning(f"Could not persist log level to settings.json: {e}")
 
 
 def get_log_level() -> int:
     return _telegram_log_level
+
+
+def load_log_level() -> None:
+    """Read telegram_log_level from settings.json and apply it. Called on startup."""
+    global _telegram_log_level
+    try:
+        settings = json.loads(_SETTINGS_FILE.read_text())
+        level = int(settings.get("telegram_log_level", 2))
+        _telegram_log_level = max(0, min(3, level))
+        log.info(f"Telegram log level loaded: {_telegram_log_level} ({LEVEL_LEGEND[_telegram_log_level]})")
+    except Exception as e:
+        log.warning(f"Could not load log level from settings.json: {e}")
 
 
 def _cfg() -> dict:

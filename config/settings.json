@@ -1,28 +1,37 @@
 {
   "trailing_stop": {
     "enabled": true,
-    "initial_stop_pct": 0.10,
+    "initial_stop_pct": 0.1,
     "trailing_pct": 0.05,
     "ladder_buys": [
-      {"drop_pct": 0.20, "shares": 10},
-      {"drop_pct": 0.30, "shares": 20}
+      {
+        "drop_pct": 0.2,
+        "shares": 10
+      },
+      {
+        "drop_pct": 0.3,
+        "shares": 20
+      }
     ]
   },
   "wheel": {
     "enabled": false,
     "stocks": [],
-    "profit_close_pct": 0.50,
+    "profit_close_pct": 0.5,
     "put_otm_pct": 0.05,
     "call_otm_pct": 0.05,
     "weeks_to_expiry": 2
   },
   "smart_money": {
     "enabled": false,
-    "politicians": ["Michael McCaul"],
+    "politicians": [
+      "Michael McCaul"
+    ],
     "auto_copy": false,
     "min_trade_value": 15000,
     "days_lookback": 7
   },
+  "telegram_log_level": 2,
   "schedule": {
     "trailing_stop_interval_min": 5,
     "wheel_interval_min": 15,

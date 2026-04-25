@@ -14,7 +14,7 @@ import pytz
 import schedule
 
 from core.logger import log
-from core.notifier import tlog, get_log_level, LEVEL_LEGEND
+from core.notifier import tlog, get_log_level, load_log_level, LEVEL_LEGEND
 
 BASE = Path(__file__).parent.parent
 
@@ -221,6 +221,7 @@ def _run_daily_summary():
 
 def start():
     """Start the blocking scheduler. Ctrl+C to stop."""
+    load_log_level()
     cfg = _settings()
 
     trailing_min = cfg.get("trailing_stop_interval_min", 5)
