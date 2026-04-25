@@ -337,6 +337,19 @@ class TestTlog:
 # ── set_log_level / get_log_level ─────────────────────────────────────────────
 
 class TestLogLevel:
+    @pytest.fixture(autouse=True)
+    def _isolate_settings(self, tmp_path):
+        """Redirect _SETTINGS_FILE to a temp file so tests never touch the real config."""
+        import json
+        import core.notifier as notifier
+        real_path = notifier._SETTINGS_FILE
+        fake = tmp_path / "settings.json"
+        fake.write_text(json.dumps({"telegram_log_level": 2}))
+        notifier._SETTINGS_FILE = fake
+        yield
+        notifier._SETTINGS_FILE = real_path
+        notifier._telegram_log_level = 2
+
     def test_default_is_2(self):
         import core.notifier as notifier
         notifier._telegram_log_level = 2
@@ -363,3 +376,56 @@ class TestLogLevel:
         set_log_level(1)
         assert get_log_level() == 1
         notifier._telegram_log_level = 2
+
+    def test_set_persists_to_settings_file(self, tmp_path):
+        import json
+        import core.notifier as notifier
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({"telegram_log_level": 2, "schedule": {}}))
+        notifier._SETTINGS_FILE = settings_file  # autouse fixture restores this on teardown
+
+        from core.notifier import set_log_level
+        set_log_level(3)
+
+        assert json.loads(settings_file.read_text())["telegram_log_level"] == 3
+
+    def test_set_survives_missing_settings_file(self, tmp_path):
+        import core.notifier as notifier
+        notifier._SETTINGS_FILE = tmp_path / "nonexistent.json"
+
+        from core.notifier import set_log_level, get_log_level
+        set_log_level(1)  # must not raise even though file is missing
+        assert get_log_level() == 1
+
+    def test_load_reads_persisted_level(self, tmp_path):
+        import json
+        import core.notifier as notifier
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({"telegram_log_level": 3}))
+        notifier._SETTINGS_FILE = settings_file
+
+        from core.notifier import load_log_level, get_log_level
+        load_log_level()
+        assert get_log_level() == 3
+
+    def test_load_defaults_to_2_when_key_missing(self, tmp_path):
+        import json
+        import core.notifier as notifier
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({"schedule": {}}))
+        notifier._SETTINGS_FILE = settings_file
+        notifier._telegram_log_level = 0
+
+        from core.notifier import load_log_level, get_log_level
+        load_log_level()
+        assert get_log_level() == 2
+
+    def test_load_survives_corrupt_file(self, tmp_path):
+        import core.notifier as notifier
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text("not valid json{{")
+        notifier._SETTINGS_FILE = settings_file
+
+        from core.notifier import load_log_level, get_log_level
+        load_log_level()  # must not raise
+        assert get_log_level() == 2  # unchanged

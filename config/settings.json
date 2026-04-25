@@ -31,7 +31,7 @@
     "min_trade_value": 15000,
     "days_lookback": 7
   },
-  "telegram_log_level": 2,
+  "telegram_log_level": 1,
   "schedule": {
     "trailing_stop_interval_min": 5,
     "wheel_interval_min": 15,
