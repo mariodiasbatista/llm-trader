@@ -20,7 +20,20 @@
       "Bash(curl -s \"https://www.capitoltrades.com/trades\" -H \"User-Agent: Mozilla/5.0 \\(X11; Linux x86_64\\) AppleWebKit/537.36\")",
       "Bash(python3 -c \"import sys,re; html=sys.stdin.read\\(\\); m=re.search\\(r'<script id=\\\\\"__NEXT_DATA__\\\\\"[^>]*>\\(.*?\\)</script>', html, re.DOTALL\\); print\\(m.group\\(1\\)[:3000] if m else 'NOT FOUND'\\)\")",
       "Bash(git push *)",
-      "Skill(schedule)"
+      "Skill(schedule)",
+      "Bash(last reboot *)",
+      "Bash(who -b)",
+      "Bash(journalctl --list-boots)",
+      "Bash(journalctl -S \"2026-04-24 23:30\" -U \"2026-04-25 00:10\" --no-pager)",
+      "Bash(swapon --show)",
+      "Bash(ps aux *)",
+      "Bash(systemctl list-units *)",
+      "Bash(/var/projects/llmTrader/.venv/bin/python --version)",
+      "Bash(systemctl daemon-reload *)",
+      "Bash(systemctl enable *)",
+      "Bash(systemctl status *)",
+      "Bash(kill 66398)",
+      "Bash(systemctl start *)"
     ]
   }
 }

@@ -138,6 +138,52 @@ Edit `config/settings.json`:
 | `wheel.put_otm_pct` | 0.05 | Sell put 5% below market |
 | `wheel.call_otm_pct` | 0.05 | Sell call 5% above market |
 
+## Production Deployment (Server)
+
+### Scheduler as a systemd Service
+
+The scheduler runs as a systemd service so it starts automatically on boot and restarts itself on crash — no manual intervention needed.
+
+```bash
+# Check status
+systemctl status llmtrader
+
+# Restart manually
+systemctl restart llmtrader
+
+# Stop
+systemctl stop llmtrader
+
+# Tail logs via journalctl
+journalctl -u llmtrader -f
+```
+
+The service file is at `/etc/systemd/system/llmtrader.service`. Logs continue to write to `logs/bot.log` as normal.
+
+To set it up on a fresh server:
+
+```bash
+# Copy service file and enable
+cp deploy/llmtrader.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable llmtrader
+systemctl start llmtrader
+```
+
+### Memory — Add Swap (1 GB VPS)
+
+On a 1 GB server, running Claude Code + scheduler + MCP servers simultaneously can exhaust RAM and trigger the OOM killer. Add a 2 GB swap file as a safety net:
+
+```bash
+fallocate -l 2G /swapfile
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+```
+
+This persists across reboots. Verify with `free -h`.
+
 ## Important Notes
 
 - Always use `"paper": true` in `credentials.json` during development
