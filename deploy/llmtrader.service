@@ -1,0 +1,17 @@
+[Unit]
+Description=LLM Trader Scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/projects/llmTrader
+ExecStart=/var/projects/llmTrader/.venv/bin/python3 main.py scheduler
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:/var/projects/llmTrader/logs/bot.log
+StandardError=append:/var/projects/llmTrader/logs/bot.log
+
+[Install]
+WantedBy=multi-user.target
