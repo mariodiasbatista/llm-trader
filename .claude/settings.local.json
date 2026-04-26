@@ -33,7 +33,9 @@
       "Bash(systemctl enable *)",
       "Bash(systemctl status *)",
       "Bash(kill 66398)",
-      "Bash(systemctl start *)"
+      "Bash(systemctl start *)",
+      "Bash(.venv/bin/python *)",
+      "Bash(.venv/bin/pip show *)"
     ]
   }
 }
