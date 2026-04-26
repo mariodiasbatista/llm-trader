@@ -142,13 +142,10 @@ def submit_option_order(option_symbol: str, qty: int, side: OrderSide):
     option_symbol must be in OCC format: AAPL240315C00150000
     Requires options trading approval on your Alpaca account.
     """
-    from alpaca.trading.requests import OptionOrderRequest
-
-    order = OptionOrderRequest(
+    order = MarketOrderRequest(
         symbol=option_symbol,
         qty=qty,
         side=side,
-        type="market",
         time_in_force=TimeInForce.DAY,
     )
     return _trading_client().submit_order(order)
