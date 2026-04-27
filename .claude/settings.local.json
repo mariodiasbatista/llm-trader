@@ -35,7 +35,15 @@
       "Bash(kill 66398)",
       "Bash(systemctl start *)",
       "Bash(.venv/bin/python *)",
-      "Bash(.venv/bin/pip show *)"
+      "Bash(.venv/bin/pip show *)",
+      "Bash(journalctl -S \"2026-04-26 18:00\" --no-pager)",
+      "Bash(journalctl -S \"2026-04-27 08:00\" --no-pager)",
+      "Bash(journalctl -S \"2026-04-27 08:20\" -U \"2026-04-27 08:30\" --no-pager -k)",
+      "Bash(fallocate -l 2G /swapfile)",
+      "Bash(chmod 600 /swapfile)",
+      "Bash(mkswap /swapfile)",
+      "Bash(swapon /swapfile)",
+      "Bash(echo '/swapfile none swap sw 0 0')"
     ]
   }
 }
