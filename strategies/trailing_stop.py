@@ -10,6 +10,7 @@ from pathlib import Path
 
 from core.alpaca import get_positions, get_latest_price, close_position, market_buy, get_account
 from core.logger import load_state, save_state, log_trade, log
+from core.notifier import is_configured as telegram_configured, send_insufficient_funds_alert
 
 SETTINGS_FILE = Path(__file__).parent.parent / "config" / "settings.json"
 
@@ -97,6 +98,8 @@ def check_and_update() -> dict:
                         summary["laddered"].append({"symbol": symbol, "qty": rung["shares"], "price": price})
                     else:
                         log.warning(f"[{symbol}] Ladder buy skipped — insufficient buying power (${buying_power:.0f} < ${cost:.0f})")
+                        if telegram_configured():
+                            send_insufficient_funds_alert(symbol, cost, buying_power)
                 except Exception as e:
                     log.error(f"[{symbol}] Ladder buy failed: {e}")
 

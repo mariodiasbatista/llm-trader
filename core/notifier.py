@@ -154,6 +154,10 @@ def send_ladder_alert(symbol: str, qty: int, price: float, drop_pct: float) -> N
     send_message(f"📉 *LADDER BUY* — `{symbol}`\n{qty} shares @ ${price:.2f} ({drop_pct:.1%} drop from entry)")
 
 
+def send_insufficient_funds_alert(symbol: str, needed: float, available: float) -> None:
+    send_message(f"⚠️ *SKIPPED — Insufficient Funds* — `{symbol}`\nNeed ${needed:,.0f} | Have ${available:,.0f}")
+
+
 def send_summary(text: str) -> None:
     """Send the daily summary — respects log level (info and above)."""
     if _telegram_log_level == 0 or _telegram_log_level > 2:

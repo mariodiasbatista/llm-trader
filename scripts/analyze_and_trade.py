@@ -16,7 +16,7 @@ from datetime import datetime
 
 from core.alpaca import get_account, get_positions, market_buy, get_latest_price, trailing_stop_sell
 from core.logger import load_state, save_state, log_trade, log
-from core.notifier import is_configured as telegram_configured, send_message, send_trade_approval
+from core.notifier import is_configured as telegram_configured, send_message, send_trade_approval, send_insufficient_funds_alert
 from strategies.smart_money import fetch_trades, fetch_large_trades
 from strategies.wheel import start_wheel
 from agents.claude_advisor import get_recommendation
@@ -170,6 +170,8 @@ def main():
 
         if buying_power < cost:
             log.warning(f"[{ticker}] Skipping — need ${cost:.0f}, have ${buying_power:.0f}")
+            if telegram_configured():
+                send_insufficient_funds_alert(ticker, cost, buying_power)
             results.append(result)
             continue
 
