@@ -65,6 +65,8 @@ def check_and_update() -> dict:
             "floor": ps["stop_floor"],
             "hwm": ps["high_water_mark"],
             "gap_pct": gap_pct,
+            "entry": entry,
+            "qty": qty,
         })
 
         # Stop loss triggered

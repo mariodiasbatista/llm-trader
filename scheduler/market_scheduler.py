@@ -51,7 +51,10 @@ def _run_trailing_stop():
         msg += f" | STOPPED OUT: {', '.join(stopped)}"
         for item in result["checked"]:
             if item["symbol"] in stopped:
-                send_stop_alert(item["symbol"], item["price"], item["floor"])
+                send_stop_alert(
+                    item["symbol"], item["price"], item["floor"],
+                    item.get("entry", 0), item.get("qty", 0),
+                )
     if laddered:
         msg += f" | Ladder buys: {len(laddered)}"
         for item in laddered:

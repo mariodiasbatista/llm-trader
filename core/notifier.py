@@ -151,10 +151,20 @@ def _level_allows(severity: int) -> bool:
     return _telegram_log_level != 0 and severity >= _telegram_log_level
 
 
-def send_stop_alert(symbol: str, price: float, floor: float) -> None:
+def send_stop_alert(symbol: str, price: float, floor: float, entry: float = 0, qty: float = 0) -> None:
     if not _level_allows(3):
         return
-    send_message(f"🔴 *STOP TRIGGERED* — `{symbol}`\nPrice ${price:.2f} hit floor ${floor:.2f}")
+    pnl = (price - entry) * qty if entry and qty else None
+    pnl_pct = ((price - entry) / entry * 100) if entry else None
+    pnl_line = ""
+    if pnl is not None:
+        icon = "💰" if pnl >= 0 else "🔻"
+        pnl_line = f"\n{icon} *P&L:* ${pnl:+,.2f} ({pnl_pct:+.1f}%) on {qty:.0f} shares"
+    send_message(
+        f"🔴💸 *POSITION CLOSED* — `{symbol}`\n"
+        f"Sold @ ${price:.2f} | Floor ${floor:.2f}"
+        f"{pnl_line}"
+    )
 
 
 def send_ladder_alert(symbol: str, qty: int, price: float, drop_pct: float) -> None:
