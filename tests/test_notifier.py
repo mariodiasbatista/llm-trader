@@ -122,8 +122,10 @@ class TestAlertHelpers:
         assert "AAPL" in text
         assert "140.00" in text
         assert "150.00" in text
+        assert "Total Gain" in text
         assert "P&L" in text
-        assert "$+400.00" in text  # (140-100)*10
+        assert "$+400.00" in text  # gross (140-100)*10
+        assert "Fees" in text
 
     @patch("core.notifier.send_message")
     def test_stop_alert_loss(self, mock_send):
@@ -131,7 +133,9 @@ class TestAlertHelpers:
         send_stop_alert("AAPL", 90.0, 85.0, entry=100.0, qty=10)
         text = mock_send.call_args[0][0]
         assert "🔻" in text
-        assert "$-100.00" in text  # (90-100)*10
+        assert "$-100.00" in text  # gross (90-100)*10
+        assert "Total Gain" in text
+        assert "Fees" in text
 
     @patch("core.notifier.send_message")
     def test_ladder_alert_content(self, mock_send):

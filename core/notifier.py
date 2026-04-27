@@ -151,18 +151,32 @@ def _level_allows(severity: int) -> bool:
     return _telegram_log_level != 0 and severity >= _telegram_log_level
 
 
+def _trading_fees(price: float, qty: float) -> float:
+    """Alpaca regulatory fees on a stock sell: SEC fee + FINRA TAF. Zero commission."""
+    import math
+    proceeds = price * qty
+    sec_fee = math.ceil(proceeds * 0.0000278 * 100) / 100
+    finra_taf = min(math.ceil(qty * 0.000145 * 100) / 100, 7.27)
+    return sec_fee + finra_taf
+
+
 def send_stop_alert(symbol: str, price: float, floor: float, entry: float = 0, qty: float = 0) -> None:
     if not _level_allows(3):
         return
     pnl = (price - entry) * qty if entry and qty else None
     pnl_pct = ((price - entry) / entry * 100) if entry else None
+    total_gain_line = ""
     pnl_line = ""
     if pnl is not None:
-        icon = "💰" if pnl >= 0 else "🔻"
-        pnl_line = f"\n{icon} *P&L:* ${pnl:+,.2f} ({pnl_pct:+.1f}%) on {qty:.0f} shares"
+        fees = _trading_fees(price, qty)
+        total_gain = pnl - fees
+        gain_icon = "💰" if total_gain >= 0 else "🔻"
+        total_gain_line = f" | {gain_icon} *Total Gain* ${total_gain:+,.2f}"
+        pnl_icon = "💰" if pnl >= 0 else "🔻"
+        pnl_line = f"\n{pnl_icon} *P&L:* ${pnl:+,.2f} ({pnl_pct:+.1f}%) on {qty:.0f} shares | Fees ${fees:.2f}"
     send_message(
         f"🔴💸 *POSITION CLOSED* — `{symbol}`\n"
-        f"Sold @ ${price:.2f} | Floor ${floor:.2f}"
+        f"Sold @ ${price:.2f} | Floor ${floor:.2f}{total_gain_line}"
         f"{pnl_line}"
     )
 
