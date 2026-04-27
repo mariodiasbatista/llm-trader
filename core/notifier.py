@@ -146,15 +146,26 @@ def send_trade_approval(trade_key: str, ticker: str, strategy: str,
     })
 
 
+def _level_allows(severity: int) -> bool:
+    """Return True if the current log level allows sending this severity."""
+    return _telegram_log_level != 0 and severity >= _telegram_log_level
+
+
 def send_stop_alert(symbol: str, price: float, floor: float) -> None:
+    if not _level_allows(3):
+        return
     send_message(f"🔴 *STOP TRIGGERED* — `{symbol}`\nPrice ${price:.2f} hit floor ${floor:.2f}")
 
 
 def send_ladder_alert(symbol: str, qty: int, price: float, drop_pct: float) -> None:
+    if not _level_allows(2):
+        return
     send_message(f"📉 *LADDER BUY* — `{symbol}`\n{qty} shares @ ${price:.2f} ({drop_pct:.1%} drop from entry)")
 
 
 def send_insufficient_funds_alert(symbol: str, needed: float, available: float) -> None:
+    if not _level_allows(2):
+        return
     send_message(f"⚠️ *SKIPPED — Insufficient Funds* — `{symbol}`\nNeed ${needed:,.0f} | Have ${available:,.0f}")
 
 
