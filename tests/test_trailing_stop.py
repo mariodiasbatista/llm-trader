@@ -15,7 +15,7 @@ def _make_position(symbol, current_price, avg_entry, qty=10):
 SETTINGS = {
     "trailing_stop": {
         "enabled": True,
-        "initial_stop_pct": 0,
+        "initial_stop_pct": 0.10,
         "trailing_pct": 0.05,
         "profit_target_pct": 0.10,
         "trailing_pct_from_profit": 0.05,
@@ -26,7 +26,15 @@ SETTINGS = {
     }
 }
 
-_BASE_STATE = {"positions": {}, "wheel": {}, "copied_trades": []}
+SETTINGS_PROFIT_TARGET = {
+    "trailing_stop": {
+        **SETTINGS["trailing_stop"],
+        "initial_stop_pct": 0,
+    }
+}
+
+def _base_state():
+    return {"positions": {}, "wheel": {}, "copied_trades": []}
 
 def _state_with(symbol, floor, hwm, entry, profit_stop_active=True):
     return {
@@ -46,11 +54,11 @@ def _state_with(symbol, floor, hwm, entry, profit_stop_active=True):
 
 class TestTrailingStopLogic:
     @patch("strategies.trailing_stop.save_state")
-    @patch("strategies.trailing_stop.load_state", return_value=_BASE_STATE)
+    @patch("strategies.trailing_stop.load_state", side_effect=_base_state)
     @patch("strategies.trailing_stop.get_positions")
     @patch("strategies.trailing_stop._settings")
-    def test_new_position_waits_for_profit_target(self, mock_settings, mock_positions, mock_load, mock_save):
-        """New position starts with floor=0 and profit_stop_active=False."""
+    def test_new_position_initializes_floor(self, mock_settings, mock_positions, mock_load, mock_save):
+        """Classic mode: new position gets floor set immediately at entry - 10%."""
         mock_settings.return_value = SETTINGS["trailing_stop"]
         mock_positions.return_value = [_make_position("AAPL", 100.0, 95.0)]
 
@@ -60,6 +68,23 @@ class TestTrailingStopLogic:
         assert len(result["checked"]) == 1
         pos = result["checked"][0]
         assert pos["symbol"] == "AAPL"
+        # Classic mode: floor = 100 * (1 - 0.10) = 90.0
+        assert abs(pos["floor"] - 90.0) < 0.01
+        assert pos["profit_stop_active"] is True
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.load_state", side_effect=_base_state)
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings")
+    def test_new_position_waits_for_profit_target(self, mock_settings, mock_positions, mock_load, mock_save):
+        """Profit-target mode: new position starts with floor=0, waiting."""
+        mock_settings.return_value = SETTINGS_PROFIT_TARGET["trailing_stop"]
+        mock_positions.return_value = [_make_position("AAPL", 100.0, 95.0)]
+
+        from strategies.trailing_stop import check_and_update
+        result = check_and_update()
+
+        pos = result["checked"][0]
         assert pos["floor"] == 0.0
         assert pos["profit_stop_active"] is False
 
@@ -68,8 +93,8 @@ class TestTrailingStopLogic:
     @patch("strategies.trailing_stop.get_positions")
     @patch("strategies.trailing_stop._settings")
     def test_profit_target_activates_stop(self, mock_settings, mock_positions, mock_load, mock_save):
-        """When price reaches +10% from entry, profit_stop_active flips True and floor is set."""
-        mock_settings.return_value = SETTINGS["trailing_stop"]
+        """Profit-target mode: when price reaches +10% from entry, stop activates."""
+        mock_settings.return_value = SETTINGS_PROFIT_TARGET["trailing_stop"]
         # entry=100, price=111 → +11% gain → crosses 10% target
         mock_positions.return_value = [_make_position("AAPL", 111.0, 100.0)]
         mock_load.return_value = _state_with("AAPL", 0.0, 100.0, 100.0, profit_stop_active=False)
