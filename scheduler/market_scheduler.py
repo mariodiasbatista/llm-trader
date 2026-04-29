@@ -239,7 +239,8 @@ def start():
     schedule.every().day.at(summary_time).do(_run_daily_summary)
     schedule.every(30).seconds.do(_poll_telegram)
 
-    from core.notifier import is_configured, send_message
+    from core.notifier import is_configured, send_message, register_command
+    register_command("/summary", "portfolio snapshot with today & total P&L", _run_daily_summary)
     telegram_status = "enabled" if is_configured() else "not configured"
     tlog(
         f"Scheduler started | trailing={trailing_min}min | "
@@ -252,7 +253,7 @@ def start():
         send_message(
             f"🚀 *LLM Trader started*\n"
             f"Scheduler running. Log level: `{get_log_level()}` — {LEVEL_LEGEND[get_log_level()]}\n"
-            f"Send /loglevel to see options."
+            f"Send /help for available commands."
         )
 
     while True:

@@ -15,6 +15,14 @@ _LAST_UPDATE_ID = 0
 # 0=off  1=debug (all, incl. API calls)  2=info/default  3=error only
 _telegram_log_level: int = 2
 
+# External command handlers registered at startup: {"/cmd": (description, callable)}
+_command_registry: dict = {}
+
+
+def register_command(command: str, description: str, handler) -> None:
+    """Register a callable for a /command so _handle_command can dispatch it."""
+    _command_registry[command] = (description, handler)
+
 LEVEL_LEGEND = {
     0: "off — no Telegram messages",
     1: "debug — everything including API calls",
@@ -201,14 +209,25 @@ def send_summary(text: str) -> None:
 
 
 def _handle_command(text: str) -> None:
-    """Dispatch /loglevel and /setlevel N commands received via Telegram."""
+    """Dispatch Telegram commands."""
     cmd = text.strip().split()
-    if cmd[0] == "/loglevel":
+
+    if cmd[0] == "/help":
+        lines = ["*LLM Trader — Available Commands*\n"]
+        lines.append("`/help` — show this message")
+        lines.append("`/summary` — portfolio snapshot with today & total P&L per position")
+        lines.append("`/loglevel` — show current Telegram log level")
+        lines.append("`/setlevel N` — set log level (0=off 1=debug 2=info 3=errors only)")
+        for cmd_name, (desc, _) in sorted(_command_registry.items()):
+            lines.append(f"`{cmd_name}` — {desc}")
+        send_message("\n".join(lines))
+
+    elif cmd[0] == "/loglevel":
         lines = ["*Telegram Log Levels*"]
         for lvl, desc in LEVEL_LEGEND.items():
             marker = " ← active" if lvl == _telegram_log_level else ""
             lines.append(f"`{lvl}` — {desc}{marker}")
-        lines.append("\nUse `/setlevel N` to change\\.")
+        lines.append("\nUse `/setlevel N` to change.")
         send_message("\n".join(lines))
 
     elif cmd[0] == "/setlevel":
@@ -223,6 +242,16 @@ def _handle_command(text: str) -> None:
                 send_message("Invalid level. Use 0–3. Send /loglevel for the legend.")
         else:
             send_message("Usage: `/setlevel N` where N is 0–3. Send /loglevel for legend.")
+
+    elif cmd[0] in _command_registry:
+        _, handler = _command_registry[cmd[0]]
+        try:
+            handler()
+        except Exception as e:
+            send_message(f"Error running `{cmd[0]}`: {e}")
+
+    else:
+        send_message(f"Unknown command: `{cmd[0]}`\nSend `/help` for available commands.")
 
 
 def poll_approvals() -> list[dict]:
