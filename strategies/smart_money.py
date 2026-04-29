@@ -80,7 +80,15 @@ def _scrape_size_to_api_format(scrape_size: str) -> str:
 
 
 def _parse_scrape_date(day: str, month_year: str) -> str:
-    """Convert '22 Apr' + '2026' to '2026-04-22'."""
+    """Convert '22 Apr' + '2026' to '2026-04-22'.
+    Also handles Capitol Trades relative formats: 'Today' and 'Yesterday'
+    (in those cases 'day' is a time string like '13:05' and is ignored).
+    """
+    lower = month_year.lower()
+    if lower == "today":
+        return datetime.now().strftime("%Y-%m-%d")
+    if lower == "yesterday":
+        return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     try:
         return datetime.strptime(f"{day} {month_year}", "%d %b %Y").strftime("%Y-%m-%d")
     except ValueError:
@@ -198,12 +206,16 @@ def fetch_trades(days_back: int = 7, politician_name: str = None,
                  source: str = "auto") -> list:
     """Pull recent politician stock disclosures, optionally filtered by name."""
     trades = _fetch_raw(source=source)
-    cutoff = datetime.now() - timedelta(days=days_back)
+    cutoff = (datetime.now() - timedelta(days=days_back)).date()
 
     recent = []
     for t in trades:
+        # Filter by publishedDate (when Capitol Trades disclosed it), not txDate
+        # (when the politician traded). Politicians have up to 45 days to file,
+        # so txDate can be months old while publishedDate is today.
+        date_str = t.get("publishedDate") or t.get("txDate", "")
         try:
-            if datetime.strptime(t.get("txDate", ""), "%Y-%m-%d") >= cutoff:
+            if datetime.strptime(date_str, "%Y-%m-%d").date() >= cutoff:
                 recent.append(t)
         except ValueError:
             pass
@@ -235,14 +247,15 @@ def fetch_large_trades(min_size: int = 50_000, days_back: int = 7,
         source: "auto" | "api" | "web"
     """
     trades = _fetch_raw(page_size=100, source=source)
-    cutoff = datetime.now() - timedelta(days=days_back)
+    cutoff = (datetime.now() - timedelta(days=days_back)).date()
 
     results = []
     for t in trades:
-        # Date filter
+        # Filter by publishedDate — when Capitol Trades disclosed it, not when
+        # the politician traded (txDate can be 45+ days old at disclosure time).
+        date_str = t.get("publishedDate") or t.get("txDate", "")
         try:
-            tx_date = datetime.strptime(t.get("txDate", ""), "%Y-%m-%d")
-            if tx_date < cutoff:
+            if datetime.strptime(date_str, "%Y-%m-%d").date() < cutoff:
                 continue
         except ValueError:
             continue

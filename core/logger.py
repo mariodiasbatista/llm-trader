@@ -10,15 +10,16 @@ LOGS_DIR.mkdir(exist_ok=True)
 STATE_FILE = LOGS_DIR / "state.json"
 TRADE_LOG = LOGS_DIR / "trades.log"
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(LOGS_DIR / "bot.log"),
-        logging.StreamHandler(),
-    ],
-)
 log = logging.getLogger("llm-trader")
+if not log.handlers:
+    log.setLevel(logging.INFO)
+    log.propagate = False
+    _fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    _fh = logging.FileHandler(LOGS_DIR / "bot.log")
+    _fh.setFormatter(_fmt)
+    log.addHandler(_fh)
+    # StreamHandler omitted: systemd redirects stdout to bot.log, which
+    # would duplicate every line when running as a service.
 
 
 def load_state() -> dict:
