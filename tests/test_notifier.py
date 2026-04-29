@@ -411,6 +411,137 @@ class TestLogLevel:
         set_log_level(1)  # must not raise even though file is missing
         assert get_log_level() == 1
 
+
+# ── register_command / /help / /summary ───────────────────────────────────────
+
+class TestRegisterCommand:
+    @pytest.fixture(autouse=True)
+    def _clean_registry(self):
+        """Isolate _command_registry between tests."""
+        import core.notifier as notifier
+        original = dict(notifier._command_registry)
+        yield
+        notifier._command_registry = original
+
+    def test_register_adds_to_registry(self):
+        import core.notifier as notifier
+        from core.notifier import register_command
+        handler = lambda: None
+        register_command("/mycommand", "does something", handler)
+        assert "/mycommand" in notifier._command_registry
+        desc, fn = notifier._command_registry["/mycommand"]
+        assert desc == "does something"
+        assert fn is handler
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_registered_command_is_dispatched(self, mock_cfg, mock_send):
+        from core.notifier import register_command, _handle_command
+        called = []
+        register_command("/mycommand", "test", lambda: called.append(True))
+        _handle_command("/mycommand")
+        assert called == [True]
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_handler_exception_sends_error_message(self, mock_cfg, mock_send):
+        from core.notifier import register_command, _handle_command
+        register_command("/boom", "explodes", lambda: (_ for _ in ()).throw(RuntimeError("oops")))
+        _handle_command("/boom")
+        mock_send.assert_called_once()
+        assert "Error" in mock_send.call_args[0][0]
+        assert "oops" in mock_send.call_args[0][0]
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_unknown_command_sends_hint(self, mock_cfg, mock_send):
+        from core.notifier import _handle_command
+        _handle_command("/doesnotexist")
+        mock_send.assert_called_once()
+        text = mock_send.call_args[0][0]
+        assert "Unknown" in text
+        assert "/help" in text
+
+
+class TestHelpCommand:
+    @pytest.fixture(autouse=True)
+    def _clean_registry(self):
+        import core.notifier as notifier
+        original = dict(notifier._command_registry)
+        yield
+        notifier._command_registry = original
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_help_lists_builtin_commands(self, mock_cfg, mock_send):
+        from core.notifier import _handle_command
+        _handle_command("/help")
+        mock_send.assert_called_once()
+        text = mock_send.call_args[0][0]
+        assert "/help" in text
+        assert "/summary" in text
+        assert "/loglevel" in text
+        assert "/setlevel" in text
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_help_includes_registered_commands(self, mock_cfg, mock_send):
+        from core.notifier import register_command, _handle_command
+        register_command("/status", "show bot status", lambda: None)
+        _handle_command("/help")
+        text = mock_send.call_args[0][0]
+        assert "/status" in text
+        assert "show bot status" in text
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier._post")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_help_via_poll_approvals(self, mock_cfg, mock_post, mock_send):
+        import core.notifier as notifier
+        notifier._LAST_UPDATE_ID = 0
+        mock_post.return_value = {"result": [{
+            "update_id": 20,
+            "message": {"text": "/help"},
+        }]}
+        from core.notifier import poll_approvals
+        poll_approvals()
+        mock_send.assert_called_once()
+        assert "/help" in mock_send.call_args[0][0]
+
+
+class TestSummaryCommand:
+    @pytest.fixture(autouse=True)
+    def _clean_registry(self):
+        import core.notifier as notifier
+        original = dict(notifier._command_registry)
+        yield
+        notifier._command_registry = original
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_summary_command_calls_handler(self, mock_cfg, mock_send):
+        from core.notifier import register_command, _handle_command
+        calls = []
+        register_command("/summary", "portfolio snapshot", lambda: calls.append(True))
+        _handle_command("/summary")
+        assert calls == [True]
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier._post")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_summary_triggered_via_telegram_message(self, mock_cfg, mock_post, mock_send):
+        import core.notifier as notifier
+        notifier._LAST_UPDATE_ID = 0
+        mock_post.return_value = {"result": [{
+            "update_id": 21,
+            "message": {"text": "/summary"},
+        }]}
+        calls = []
+        from core.notifier import register_command, poll_approvals
+        register_command("/summary", "portfolio snapshot", lambda: calls.append(True))
+        poll_approvals()
+        assert calls == [True]
+
     def test_load_reads_persisted_level(self, tmp_path):
         import json
         import core.notifier as notifier
