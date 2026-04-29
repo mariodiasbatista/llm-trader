@@ -233,11 +233,18 @@ def start():
     analyze_min = cfg.get("analyze_interval_min", 30)
     summary_time = cfg.get("summary_time", "16:05")
 
+    # Clear any pending_trades left over from a previous run — they're stale
+    from core.logger import load_state, save_state
+    state = load_state()
+    if state.get("pending_trades"):
+        tlog(f"Clearing {len(state['pending_trades'])} stale pending trades from previous session", 2)
+        state["pending_trades"] = {}
+        save_state(state)
+
     schedule.every(trailing_min).minutes.do(_run_trailing_stop)
     schedule.every(wheel_min).minutes.do(_run_wheel)
     schedule.every(analyze_min).minutes.do(_run_analyze)
     schedule.every().day.at(summary_time).do(_run_daily_summary)
-    schedule.every(30).seconds.do(_poll_telegram)
 
     from core.notifier import is_configured, send_message, register_command
     register_command("/summary", "portfolio snapshot with today & total P&L", _run_daily_summary)
@@ -255,6 +262,9 @@ def start():
             f"Scheduler running. Log level: `{get_log_level()}` — {LEVEL_LEGEND[get_log_level()]}\n"
             f"Send /help for available commands."
         )
+
+    # Run trailing stop immediately on startup (don't wait for first interval)
+    _run_trailing_stop()
 
     while True:
         schedule.run_pending()
