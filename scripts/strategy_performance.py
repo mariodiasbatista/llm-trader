@@ -36,7 +36,7 @@ def load_trades() -> list:
 def infer_strategy(action: str, notes: str) -> str:
     """Determine which strategy produced this trade entry."""
     combined = f"{action} {notes}".upper()
-    if any(k in combined for k in ("TRAILING_STOP", "TRAILING", "STOP_SELL", "LADDER")):
+    if any(k in combined for k in ("TRAILING_STOP", "TRAILING", "STOP_SELL", "TAKE_PROFIT", "LADDER")):
         return "TRAILING_STOP"
     if any(k in combined for k in ("WHEEL", "SELL_PUT", "SELL_CALL")):
         return "WHEEL"
@@ -84,7 +84,7 @@ def main():
                        for k in ("BUY", "START_WHEEL", "SELL_PUT"))]
         exits = [t for t in strat_trades
                  if any(k in t.get("action", "").upper()
-                        for k in ("STOP_SELL", "SELL_CALL", "CLOSE"))]
+                        for k in ("STOP_SELL", "TAKE_PROFIT", "SELL_CALL", "CLOSE"))]
 
         deployed = sum(t.get("price", 0) * float(t.get("qty", 0)) for t in buys)
 
@@ -109,7 +109,7 @@ def main():
                                for k in ("BUY", "SELL_PUT", "START_WHEEL"))]
             sym_exits = [t for t in sym_trades
                          if any(k in t.get("action", "").upper()
-                                for k in ("STOP_SELL", "SELL_CALL", "CLOSE"))]
+                                for k in ("STOP_SELL", "TAKE_PROFIT", "SELL_CALL", "CLOSE"))]
 
             cost = sum(t.get("price", 0) * float(t.get("qty", 0)) for t in sym_buys)
             revenue = sum(t.get("price", 0) * float(t.get("qty", 0)) for t in sym_exits)

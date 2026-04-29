@@ -18,6 +18,7 @@ def main():
     state = load_state()
     cfg = json.load(open(SETTINGS_FILE))["trailing_stop"]
     profit_target_pct = cfg.get("profit_target_pct", 0)
+    take_profit_pct = cfg.get("take_profit_pct", 0)
 
     day_pnl = float(acct.equity) - float(acct.last_equity)
     print(f"\n{'─'*60}")
@@ -41,13 +42,16 @@ def main():
         gain_pct = (price - entry) / entry * 100
         stop_active = ps.get("profit_stop_active", False)
 
+        take_profit_price = entry * (1 + take_profit_pct) if take_profit_pct else None
         if stop_active and floor:
-            stop_status = f"ACTIVE  floor=${floor:.2f}  ({(price - floor) / price * 100:.1f}% gap)"
-        elif profit_target_pct > 0:
+            stop_str = f"stop=${floor:.2f}"
+        elif profit_target_pct > 0 and not stop_active:
             needed = profit_target_pct * 100 - gain_pct
-            stop_status = f"waiting  need +{needed:.1f}% more to activate"
+            stop_str = f"stop activates in +{needed:.1f}%"
         else:
-            stop_status = "disabled"
+            stop_str = "stop=off"
+        tp_str = f"  tp=${take_profit_price:.2f}" if take_profit_price else ""
+        stop_status = stop_str + tp_str
 
         rows.append([
             sym,

@@ -40,6 +40,7 @@ def check_and_update() -> dict:
 
         initial_stop_pct = cfg.get("initial_stop_pct", 0)
         profit_target_pct = cfg.get("profit_target_pct", 0)
+        take_profit_pct = cfg.get("take_profit_pct", 0)
         trailing_pct = cfg.get("trailing_pct", 0.05)
         trail_from_profit = cfg.get("trailing_pct_from_profit", trailing_pct)
         gain_pct = (price - entry) / entry
@@ -98,6 +99,18 @@ def check_and_update() -> dict:
             "gain_pct": gain_pct,
             "profit_stop_active": ps.get("profit_stop_active", False),
         })
+
+        # Take-profit: sell immediately when gain hits the target
+        if take_profit_pct > 0 and gain_pct >= take_profit_pct:
+            log.info(f"[{symbol}] TAKE PROFIT @ ${price:.2f} (+{gain_pct:.1%} from entry ${entry:.2f})")
+            try:
+                close_position(symbol)
+                log_trade("TAKE_PROFIT", symbol, qty, price, f"gain={gain_pct:.1%} target={take_profit_pct:.0%}")
+                summary["stopped_out"].append(symbol)
+                del state["positions"][symbol]
+                continue
+            except Exception as e:
+                log.error(f"[{symbol}] Take-profit sell failed: {e}")
 
         # Stop triggered when floor is active and price breaches it
         if ps.get("profit_stop_active") and price <= ps["stop_floor"]:

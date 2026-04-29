@@ -17,6 +17,7 @@ SETTINGS = {
         "enabled": True,
         "initial_stop_pct": 0.10,
         "trailing_pct": 0.05,
+        "take_profit_pct": 0.20,
         "profit_target_pct": 0.10,
         "trailing_pct_from_profit": 0.05,
         "ladder_buys": [
@@ -192,3 +193,47 @@ class TestTrailingStopLogic:
 
         mock_close.assert_called_once_with("AAPL")
         assert "AAPL" in result["stopped_out"]
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.load_state")
+    @patch("strategies.trailing_stop.close_position")
+    @patch("strategies.trailing_stop.log_trade")
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings")
+    def test_take_profit_fires_at_target(
+        self, mock_settings, mock_positions, mock_log, mock_close, mock_load, mock_save
+    ):
+        """Take-profit closes position immediately when gain_pct hits take_profit_pct."""
+        mock_settings.return_value = SETTINGS["trailing_stop"]
+        # entry=100, price=122 → +22% → above 20% take_profit_pct
+        mock_positions.return_value = [_make_position("AAPL", 122.0, 100.0)]
+        mock_load.return_value = _state_with("AAPL", 103.0, 115.0, 100.0, profit_stop_active=True)
+
+        from strategies.trailing_stop import check_and_update
+        result = check_and_update()
+
+        mock_close.assert_called_once_with("AAPL")
+        assert "AAPL" in result["stopped_out"]
+        log_call = mock_log.call_args[0]
+        assert log_call[0] == "TAKE_PROFIT"
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.load_state")
+    @patch("strategies.trailing_stop.close_position")
+    @patch("strategies.trailing_stop.log_trade")
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings")
+    def test_take_profit_not_triggered_below_target(
+        self, mock_settings, mock_positions, mock_log, mock_close, mock_load, mock_save
+    ):
+        """Take-profit does not fire when gain is below target."""
+        mock_settings.return_value = SETTINGS["trailing_stop"]
+        # entry=100, price=115 → +15% → below 20% take_profit_pct
+        mock_positions.return_value = [_make_position("AAPL", 115.0, 100.0)]
+        mock_load.return_value = _state_with("AAPL", 103.0, 115.0, 100.0, profit_stop_active=True)
+
+        from strategies.trailing_stop import check_and_update
+        result = check_and_update()
+
+        mock_close.assert_not_called()
+        assert "AAPL" not in result["stopped_out"]
