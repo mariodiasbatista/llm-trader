@@ -38,20 +38,21 @@ def check_and_update() -> dict:
         qty = float(pos.qty)
 
         # Bootstrap state for newly tracked positions
+        stop_disabled = cfg["initial_stop_pct"] == 0
         if symbol not in state["positions"]:
-            floor = price * (1 - cfg["initial_stop_pct"])
+            floor = 0.0 if stop_disabled else price * (1 - cfg["initial_stop_pct"])
             state["positions"][symbol] = {
                 "high_water_mark": price,
                 "stop_floor": floor,
                 "entry_price": entry,
                 "ladder_triggered": [],
             }
-            log.info(f"[{symbol}] New position tracked | entry=${entry:.2f} floor=${floor:.2f}")
+            log.info(f"[{symbol}] New position tracked | entry=${entry:.2f} floor={'disabled' if stop_disabled else f'${floor:.2f}'}")
 
         ps = state["positions"][symbol]
 
-        # Raise trailing floor when price sets a new high
-        if price > ps["high_water_mark"]:
+        # Raise trailing floor when price sets a new high (skipped when stop disabled)
+        if not stop_disabled and price > ps["high_water_mark"]:
             ps["high_water_mark"] = price
             new_floor = price * (1 - cfg["trailing_pct"])
             if new_floor > ps["stop_floor"]:
