@@ -200,12 +200,13 @@ def _run_daily_summary():
         floor_str = f"  floor=${floor:.2f}" if floor else ""
         log.info(
             f"    {p.symbol:6s} {p.qty:>8} shares  "
-            f"P&L ${float(p.unrealized_pl):>+9.2f} "
-            f"({float(p.unrealized_plpc)*100:>+5.1f}%){floor_str}"
+            f"Today ${float(p.unrealized_intraday_pl):>+9.2f} ({float(p.unrealized_intraday_plpc)*100:>+5.1f}%)  "
+            f"Total ${float(p.unrealized_pl):>+9.2f} ({float(p.unrealized_plpc)*100:>+5.1f}%){floor_str}"
         )
         pos_lines.append(
             f"`{p.symbol}` {p.qty}sh  "
-            f"P&L ${float(p.unrealized_pl):+.2f} ({float(p.unrealized_plpc)*100:+.1f}%){floor_str}"
+            f"Today ${float(p.unrealized_intraday_pl):+.2f} ({float(p.unrealized_intraday_plpc)*100:+.1f}%)  "
+            f"Total ${float(p.unrealized_pl):+.2f} ({float(p.unrealized_plpc)*100:+.1f}%){floor_str}"
         )
     log.info("=" * 55)
 

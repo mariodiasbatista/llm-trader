@@ -31,12 +31,14 @@ def main():
                 p.symbol,
                 f"{float(p.qty):.0f}",
                 f"${float(p.current_price):.2f}",
+                f"${float(p.unrealized_intraday_pl):>+.2f}",
+                f"{float(p.unrealized_intraday_plpc)*100:>+.1f}%",
                 f"${float(p.unrealized_pl):>+.2f}",
                 f"{float(p.unrealized_plpc)*100:>+.1f}%",
                 f"${ps['stop_floor']:.2f}" if ps.get("stop_floor") else "—",
             ])
         print()
-        print(tabulate(rows, headers=["Symbol", "Qty", "Price", "Unreal. P&L", "P&L%", "Stop"], tablefmt="simple"))
+        print(tabulate(rows, headers=["Symbol", "Qty", "Price", "Today $", "Today %", "Total $", "Total %", "Stop"], tablefmt="simple"))
 
     wheel = state.get("wheel", {})
     if wheel:
