@@ -87,21 +87,16 @@ def main():
                         for k in ("STOP_SELL", "SELL_CALL", "CLOSE"))]
 
         deployed = sum(t.get("price", 0) * float(t.get("qty", 0)) for t in buys)
-        returned = sum(t.get("price", 0) * float(t.get("qty", 0)) for t in exits)
-        premiums = sum(t.get("price", 0) * float(t.get("qty", 0)) * 100
-                       for t in strat_trades if "SELL_PUT" in t.get("action", "").upper()
-                       or "SELL_CALL" in t.get("action", "").upper())
-        realized_pnl = returned - deployed + premiums
 
         print(f"\n{'─'*70}")
         print(f"  {strategy}")
         print(f"    Entries   : {len(buys)}")
         print(f"    Exits     : {len(exits)}")
         print(f"    Deployed  : ${deployed:>12,.2f}")
-        print(f"    Realized  : ${realized_pnl:>+12,.2f}")
 
-        # Per-ticker breakdown
+        # Per-ticker breakdown — accumulate totals here instead of pre-loop
         ticker_rows = []
+        total_realized = 0.0
         total_unrealized = 0.0
 
         for sym in sorted(by_ticker_strategy.keys()):
@@ -125,7 +120,8 @@ def main():
 
             unrealized = 0.0
             status = "Closed"
-            if sym in positions:
+            is_open = sym in positions
+            if is_open:
                 pos = positions[sym]
                 unrealized = float(pos.unrealized_pl)
                 total_unrealized += unrealized
@@ -133,8 +129,13 @@ def main():
                 pnl_pct = float(pos.unrealized_plpc) * 100
                 status = f"Open ${price_now:.2f} ({pnl_pct:>+.1f}%)"
 
-            total_pnl = (revenue - cost + prems) + unrealized
-            roi = (total_pnl / cost * 100) if cost > 0 else 0
+            if is_open:
+                total_pnl = unrealized
+                roi = (unrealized / cost * 100) if cost > 0 else 0
+            else:
+                total_pnl = revenue - cost + prems
+                total_realized += total_pnl
+                roi = (total_pnl / cost * 100) if cost > 0 else 0
 
             ticker_rows.append([
                 sym, status,
@@ -150,8 +151,9 @@ def main():
                            tablefmt="simple",
                            colalign=("left", "left", "right", "right", "right")))
 
-        total_pnl_strat = realized_pnl + total_unrealized
+        total_pnl_strat = total_realized + total_unrealized
         roi_strat = (total_pnl_strat / deployed * 100) if deployed > 0 else 0
+        print(f"\n    Realized   : ${total_realized:>+12,.2f}")
         print(f"\n    Unrealized : ${total_unrealized:>+12,.2f}")
         print(f"    TOTAL P&L  : ${total_pnl_strat:>+12,.2f}  (ROI {roi_strat:>+.1f}%)")
 

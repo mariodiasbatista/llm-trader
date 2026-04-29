@@ -16,7 +16,7 @@ from pathlib import Path
 
 from alpaca.trading.enums import OrderSide
 
-from core.alpaca import submit_option_order, get_latest_price, get_position, get_open_orders
+from core.alpaca import submit_option_order, get_latest_price, get_option_mid_price, get_position, get_open_orders
 from core.logger import load_state, save_state, log_trade, log
 
 SETTINGS_FILE = Path(__file__).parent.parent / "config" / "settings.json"
@@ -50,8 +50,9 @@ def start_wheel(symbol: str, contracts: int = 1) -> dict:
     expiry = _next_expiry(cfg.get("weeks_to_expiry", 2))
     option_sym = _occ_symbol(symbol, expiry, "put", put_strike)
 
+    premium = get_option_mid_price(option_sym)
     submit_option_order(option_sym, contracts, OrderSide.SELL)
-    log_trade("SELL_PUT", symbol, contracts, put_strike, f"option={option_sym}")
+    log_trade("SELL_PUT", symbol, contracts, premium, f"option={option_sym} strike={put_strike}")
 
     state = load_state()
     state["wheel"][symbol] = {
@@ -96,8 +97,9 @@ def check_and_manage() -> dict:
                 new_expiry = _next_expiry(cfg.get("weeks_to_expiry", 2))
                 option_sym = _occ_symbol(symbol, new_expiry, "call", call_strike)
                 try:
+                    call_premium = get_option_mid_price(option_sym)
                     submit_option_order(option_sym, contracts, OrderSide.SELL)
-                    log_trade("SELL_CALL", symbol, contracts, call_strike, f"option={option_sym}")
+                    log_trade("SELL_CALL", symbol, contracts, call_premium, f"option={option_sym} strike={call_strike}")
                     ws["stage"] = 2
                     ws["call_strike"] = call_strike
                     ws["option_symbol"] = option_sym
@@ -116,8 +118,9 @@ def check_and_manage() -> dict:
                 new_expiry = _next_expiry(cfg.get("weeks_to_expiry", 2))
                 option_sym = _occ_symbol(symbol, new_expiry, "put", put_strike)
                 try:
+                    put_premium = get_option_mid_price(option_sym)
                     submit_option_order(option_sym, contracts, OrderSide.SELL)
-                    log_trade("SELL_PUT", symbol, contracts, put_strike, f"option={option_sym}")
+                    log_trade("SELL_PUT", symbol, contracts, put_premium, f"option={option_sym} strike={put_strike}")
                     ws["stage"] = 1
                     ws["put_strike"] = put_strike
                     ws["option_symbol"] = option_sym

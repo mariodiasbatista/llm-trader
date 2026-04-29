@@ -22,8 +22,12 @@ from alpaca.trading.requests import (
     GetOrdersRequest,
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockLatestQuoteRequest, StockBarsRequest
+from alpaca.data.historical import StockHistoricalDataClient, OptionHistoricalDataClient
+from alpaca.data.requests import (
+    StockLatestQuoteRequest,
+    StockBarsRequest,
+    OptionLatestQuoteRequest,
+)
 from alpaca.data.timeframe import TimeFrame
 
 CREDS_FILE = Path(__file__).parent.parent / "credentials.json"
@@ -50,6 +54,11 @@ def _trading_client() -> TradingClient:
 def _data_client() -> StockHistoricalDataClient:
     c = _creds()["alpaca"]
     return StockHistoricalDataClient(api_key=c["api_key"], secret_key=c["secret_key"])
+
+
+def _option_data_client() -> OptionHistoricalDataClient:
+    c = _creds()["alpaca"]
+    return OptionHistoricalDataClient(api_key=c["api_key"], secret_key=c["secret_key"])
 
 
 # ── Account ────────────────────────────────────────────────────────────────
@@ -149,6 +158,21 @@ def submit_option_order(option_symbol: str, qty: int, side: OrderSide):
         time_in_force=TimeInForce.DAY,
     )
     return _trading_client().submit_order(order)
+
+
+def get_option_mid_price(option_symbol: str) -> float:
+    """Return bid/ask midpoint for an option contract. Returns 0.0 if unavailable."""
+    try:
+        req = OptionLatestQuoteRequest(symbol_or_symbols=option_symbol)
+        quote = _option_data_client().get_option_latest_quote(req)
+        q = quote[option_symbol]
+        ask = float(q.ask_price or 0)
+        bid = float(q.bid_price or 0)
+        if ask and bid:
+            return (ask + bid) / 2
+        return ask or bid
+    except Exception:
+        return 0.0
 
 
 # ── Market data ────────────────────────────────────────────────────────────
