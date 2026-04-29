@@ -1,6 +1,7 @@
 """Tests for web scraping fallback and source param in smart_money.py."""
 import pytest
 import requests
+from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 from strategies.smart_money import (
     _scrape_size_to_api_format,
@@ -41,6 +42,19 @@ class TestParseScrapDate:
     def test_invalid_date_returns_empty(self):
         assert _parse_scrape_date("bad", "data") == ""
         assert _parse_scrape_date("", "") == ""
+
+    def test_today_format(self):
+        """Capitol Trades shows 'Today' + a time string for same-day publications."""
+        result = _parse_scrape_date("13:05", "Today")
+        assert result == datetime.now().strftime("%Y-%m-%d")
+
+    def test_yesterday_format(self):
+        result = _parse_scrape_date("09:30", "Yesterday")
+        assert result == (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    def test_today_yesterday_case_insensitive(self):
+        assert _parse_scrape_date("13:05", "TODAY") == datetime.now().strftime("%Y-%m-%d")
+        assert _parse_scrape_date("09:30", "YESTERDAY") == (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 SCRAPE_TRADES = [

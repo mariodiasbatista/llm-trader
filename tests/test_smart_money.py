@@ -1,5 +1,6 @@
 """Tests for smart_money.py — size filtering and disclosure fetching."""
 import pytest
+from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 from strategies.smart_money import _estimate_size, fetch_large_trades, fetch_trades, SIZE_MIDPOINTS
 
@@ -111,3 +112,58 @@ class TestFetchTrades:
     def test_empty_api_response(self, mock_fetch):
         results = fetch_trades(days_back=7)
         assert results == []
+
+
+def _trade(tx_days_ago, pub_days_ago=None, size="$100,001 - $250,000",
+           tx_type="Buy", ticker="NVDA"):
+    today = datetime.now().date()
+    t = {
+        "txDate": str(today - timedelta(days=tx_days_ago)),
+        "txType": tx_type,
+        "size": size,
+        "politician": {"name": "Test Politician", "id": "P001"},
+        "asset": {"ticker": ticker, "assetType": "stock"},
+    }
+    if pub_days_ago is not None:
+        t["publishedDate"] = str(today - timedelta(days=pub_days_ago))
+    return t
+
+
+class TestPublishedDateFiltering:
+    """Verify both fetch functions filter on publishedDate, not txDate."""
+
+    @patch("strategies.smart_money._fetch_raw")
+    def test_fetch_trades_old_tx_recent_pub_appears(self, mock_raw):
+        """Traded 40 days ago but disclosed 3 days ago — should appear."""
+        mock_raw.return_value = [_trade(tx_days_ago=40, pub_days_ago=3)]
+        assert len(fetch_trades(days_back=7)) == 1
+
+    @patch("strategies.smart_money._fetch_raw")
+    def test_fetch_trades_old_pub_excluded(self, mock_raw):
+        """Traded 5 days ago but disclosed 30 days ago — outside 7-day window."""
+        mock_raw.return_value = [_trade(tx_days_ago=5, pub_days_ago=30)]
+        assert fetch_trades(days_back=7) == []
+
+    @patch("strategies.smart_money._fetch_raw")
+    def test_fetch_trades_falls_back_to_tx_date_when_no_pub_date(self, mock_raw):
+        """API trades without publishedDate still filter correctly via txDate."""
+        mock_raw.return_value = [_trade(tx_days_ago=3)]  # no publishedDate key
+        assert len(fetch_trades(days_back=7)) == 1
+
+    @patch("strategies.smart_money._fetch_raw")
+    def test_fetch_large_old_tx_recent_pub_appears(self, mock_raw):
+        """Traded 40 days ago but disclosed 3 days ago — should appear."""
+        mock_raw.return_value = [_trade(tx_days_ago=40, pub_days_ago=3)]
+        assert len(fetch_large_trades(min_size=0, days_back=7)) == 1
+
+    @patch("strategies.smart_money._fetch_raw")
+    def test_fetch_large_old_pub_excluded(self, mock_raw):
+        """Traded 5 days ago but disclosed 30 days ago — outside 7-day window."""
+        mock_raw.return_value = [_trade(tx_days_ago=5, pub_days_ago=30)]
+        assert fetch_large_trades(min_size=0, days_back=7) == []
+
+    @patch("strategies.smart_money._fetch_raw")
+    def test_fetch_large_falls_back_to_tx_date_when_no_pub_date(self, mock_raw):
+        """API trades without publishedDate still filter correctly via txDate."""
+        mock_raw.return_value = [_trade(tx_days_ago=3)]  # no publishedDate key
+        assert len(fetch_large_trades(min_size=0, days_back=7)) == 1
