@@ -1,8 +1,9 @@
 """
 Phase 2 — Trailing Stop Strategy
-- Maintains a stop floor that starts 10% below entry
-- Raises the floor as price climbs (trails 5% below the new high)
-- Sells the full position if price hits the floor
+- Holds freely until the position reaches profit_target_pct gain from entry
+- Once the profit target is hit, activates a trailing stop floor
+- Raises the floor as price climbs (trails trailing_pct_from_profit below the new high)
+- Sells the full position if price hits the active floor
 - Laddered buys: auto-purchases more shares on steep dips
 """
 import json
@@ -38,28 +39,41 @@ def check_and_update() -> dict:
         qty = float(pos.qty)
 
         # Bootstrap state for newly tracked positions
-        stop_disabled = cfg["initial_stop_pct"] == 0
         if symbol not in state["positions"]:
-            floor = 0.0 if stop_disabled else price * (1 - cfg["initial_stop_pct"])
             state["positions"][symbol] = {
                 "high_water_mark": price,
-                "stop_floor": floor,
+                "stop_floor": 0.0,
                 "entry_price": entry,
                 "ladder_triggered": [],
+                "profit_stop_active": False,
             }
-            log.info(f"[{symbol}] New position tracked | entry=${entry:.2f} floor={'disabled' if stop_disabled else f'${floor:.2f}'}")
+            log.info(f"[{symbol}] New position tracked | entry=${entry:.2f} | waiting for profit target")
 
         ps = state["positions"][symbol]
+        profit_target_pct = cfg.get("profit_target_pct", 0)
+        trail_from_profit = cfg.get("trailing_pct_from_profit", cfg.get("trailing_pct", 0.05))
+        gain_pct = (price - entry) / entry
 
-        # Raise trailing floor when price sets a new high (skipped when stop disabled)
-        if not stop_disabled and price > ps["high_water_mark"]:
-            ps["high_water_mark"] = price
-            new_floor = price * (1 - cfg["trailing_pct"])
-            if new_floor > ps["stop_floor"]:
-                ps["stop_floor"] = new_floor
-                log.info(f"[{symbol}] New high ${price:.2f} → floor raised to ${new_floor:.2f}")
+        if not ps.get("profit_stop_active", False):
+            # Activate trailing stop once profit target is reached
+            if profit_target_pct > 0 and gain_pct >= profit_target_pct:
+                ps["profit_stop_active"] = True
+                ps["high_water_mark"] = price
+                ps["stop_floor"] = price * (1 - trail_from_profit)
+                log.info(
+                    f"[{symbol}] Profit target +{profit_target_pct:.0%} reached @ ${price:.2f} "
+                    f"→ trailing stop activated, floor=${ps['stop_floor']:.2f}"
+                )
+        else:
+            # Trail the floor upward as price sets new highs
+            if price > ps["high_water_mark"]:
+                ps["high_water_mark"] = price
+                new_floor = price * (1 - trail_from_profit)
+                if new_floor > ps["stop_floor"]:
+                    ps["stop_floor"] = new_floor
+                    log.info(f"[{symbol}] New high ${price:.2f} → floor raised to ${new_floor:.2f}")
 
-        gap_pct = (price - ps["stop_floor"]) / price * 100
+        gap_pct = (price - ps["stop_floor"]) / price * 100 if ps["stop_floor"] > 0 else None
         summary["checked"].append({
             "symbol": symbol,
             "price": price,
@@ -68,10 +82,12 @@ def check_and_update() -> dict:
             "gap_pct": gap_pct,
             "entry": entry,
             "qty": qty,
+            "gain_pct": gain_pct,
+            "profit_stop_active": ps.get("profit_stop_active", False),
         })
 
-        # Stop loss triggered
-        if price <= ps["stop_floor"]:
+        # Stop triggered (only fires once profit_stop_active=True and floor is set)
+        if ps.get("profit_stop_active") and price <= ps["stop_floor"]:
             log.warning(f"[{symbol}] STOP TRIGGERED @ ${price:.2f} (floor ${ps['stop_floor']:.2f})")
             try:
                 close_position(symbol)

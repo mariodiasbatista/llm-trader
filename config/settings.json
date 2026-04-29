@@ -3,6 +3,8 @@
     "enabled": true,
     "initial_stop_pct": 0,
     "trailing_pct": 0.05,
+    "profit_target_pct": 0.1,
+    "trailing_pct_from_profit": 0.05,
     "ladder_buys": [
       {
         "drop_pct": 0.2,
