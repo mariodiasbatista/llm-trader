@@ -176,13 +176,21 @@ def _fetch_raw_scrape(page: int = 1) -> list:
     return trades
 
 
-def _fetch_raw(page_size: int = 100, page: int = 1, source: str = "auto") -> list:
-    """Fetch one page of disclosures.
+def _fetch_raw(page_size: int = 100, page: int = 1, source: str = "auto",
+               max_pages: int = 5) -> list:
+    """Fetch up to max_pages of disclosures and return them combined.
 
     source: "auto" (API with web fallback) | "api" (API only) | "web" (scrape only)
+    max_pages: cap on pages to fetch (default 5 = up to 500 API rows / ~60 scrape rows)
     """
     if source == "web":
-        return _fetch_raw_scrape(page=page)
+        all_trades = []
+        for p in range(page, page + max_pages):
+            page_trades = _fetch_raw_scrape(page=p)
+            if not page_trades:
+                break
+            all_trades.extend(page_trades)
+        return all_trades
 
     params = {
         "pageSize": page_size,
@@ -199,7 +207,13 @@ def _fetch_raw(page_size: int = 100, page: int = 1, source: str = "auto") -> lis
             log.error(f"Capitol Trades API unavailable: {e}")
             return []
         log.warning(f"Capitol Trades API unavailable ({e}), falling back to web scrape")
-        return _fetch_raw_scrape(page=page)
+        all_trades = []
+        for p in range(page, page + max_pages):
+            page_trades = _fetch_raw_scrape(page=p)
+            if not page_trades:
+                break
+            all_trades.extend(page_trades)
+        return all_trades
 
 
 def fetch_trades(days_back: int = 7, politician_name: str = None,

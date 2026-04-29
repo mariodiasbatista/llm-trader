@@ -80,10 +80,10 @@ SCRAPE_TRADES = [
 
 
 class TestFetchRawSourceParam:
-    @patch("strategies.smart_money._fetch_raw_scrape", return_value=SCRAPE_TRADES)
+    @patch("strategies.smart_money._fetch_raw_scrape", side_effect=[SCRAPE_TRADES, []])
     def test_source_web_calls_scraper(self, mock_scrape):
         result = _fetch_raw(source="web")
-        mock_scrape.assert_called_once()
+        assert mock_scrape.call_count == 2  # page 1 had data, page 2 empty → stops
         assert result == SCRAPE_TRADES
 
     @patch("strategies.smart_money._fetch_raw_scrape")
@@ -94,12 +94,12 @@ class TestFetchRawSourceParam:
         mock_scrape.assert_not_called()
         assert result == []
 
-    @patch("strategies.smart_money._fetch_raw_scrape", return_value=SCRAPE_TRADES)
+    @patch("strategies.smart_money._fetch_raw_scrape", side_effect=[SCRAPE_TRADES, []])
     @patch("strategies.smart_money.requests.get")
     def test_source_auto_falls_back_to_scrape_on_api_error(self, mock_get, mock_scrape):
         mock_get.side_effect = requests.exceptions.RequestException("503 error")
         result = _fetch_raw(source="auto")
-        mock_scrape.assert_called_once()
+        assert mock_scrape.call_count == 2  # page 1 had data, page 2 empty → stops
         assert result == SCRAPE_TRADES
 
     @patch("strategies.smart_money._fetch_raw_scrape")

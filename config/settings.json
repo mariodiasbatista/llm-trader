@@ -36,7 +36,7 @@
     "trailing_stop_interval_min": 5,
     "wheel_interval_min": 15,
     "analyze_interval_min": 30,
-    "analyze_days": 2,
+    "analyze_days": 7,
     "analyze_min_disclosure_value": 15000,
     "analyze_source": "web",
     "market_open": "09:30",
