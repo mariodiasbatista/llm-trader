@@ -167,7 +167,6 @@ def main():
                     + (f" stop_floor={args.stop_floor}%" if args.stop_floor else "")
                 )
                 buying_power -= cost
-                state.setdefault("copied_trades", []).append(trade_key)
                 result.update({"executed": True, "shares": shares_to_buy})
                 print(f"  EXECUTED   : Bought {shares_to_buy} shares @ ${price:.2f}{stop_note}")
                 if telegram_configured():
@@ -183,7 +182,6 @@ def main():
                     f"strategy=WHEEL confidence={confidence}% "
                     f"pol={politician_name} put_strike={wheel_result['put_strike']}"
                 )
-                state.setdefault("copied_trades", []).append(trade_key)
                 result.update({"executed": True, "put_strike": wheel_result.get("put_strike")})
                 print(f"  EXECUTED   : Wheel started — put @ ${wheel_result['put_strike']:.2f}")
                 if telegram_configured():
@@ -196,6 +194,10 @@ def main():
             log.error(f"[{ticker}] Execution failed: {e}")
             if telegram_configured():
                 send_message(f"❌ Execution failed for `{ticker}`: {e}")
+        finally:
+            # Always mark signal as processed — prevents infinite retry on failure.
+            # Insufficient-funds signals are excluded (they use `continue` above).
+            state.setdefault("copied_trades", []).append(trade_key)
 
         results.append(result)
 
