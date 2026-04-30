@@ -15,6 +15,8 @@ def _debug(msg: str) -> None:
         log.debug(msg)
 
 
+import uuid
+
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
@@ -89,6 +91,10 @@ def get_position(symbol: str):
 # ── Orders ─────────────────────────────────────────────────────────────────
 
 
+def _order_id(label: str) -> str:
+    return f"llmTrader-{label}-{uuid.uuid4().hex[:8]}"
+
+
 def market_buy(symbol: str, qty: float):
     _debug(f"[alpaca] market_buy {symbol} x{qty}")
     order = MarketOrderRequest(
@@ -96,6 +102,7 @@ def market_buy(symbol: str, qty: float):
         qty=qty,
         side=OrderSide.BUY,
         time_in_force=TimeInForce.DAY,
+        client_order_id=_order_id(f"buy-{symbol}"),
     )
     result = _trading_client().submit_order(order)
     _debug(f"[alpaca] order submitted id={result.id} status={result.status}")
@@ -109,6 +116,7 @@ def market_sell(symbol: str, qty: float):
         qty=qty,
         side=OrderSide.SELL,
         time_in_force=TimeInForce.DAY,
+        client_order_id=_order_id(f"sell-{symbol}"),
     )
     result = _trading_client().submit_order(order)
     _debug(f"[alpaca] order submitted id={result.id} status={result.status}")
@@ -133,6 +141,7 @@ def trailing_stop_sell(symbol: str, qty: float, trail_percent: float):
         side=OrderSide.SELL,
         time_in_force=TimeInForce.GTC,
         trail_percent=trail_percent,
+        client_order_id=_order_id(f"trail-{symbol}"),
     )
     return _trading_client().submit_order(order)
 
@@ -151,11 +160,13 @@ def submit_option_order(option_symbol: str, qty: int, side: OrderSide):
     option_symbol must be in OCC format: AAPL240315C00150000
     Requires options trading approval on your Alpaca account.
     """
+    side_label = "buy" if side == OrderSide.BUY else "sell"
     order = MarketOrderRequest(
         symbol=option_symbol,
         qty=qty,
         side=side,
         time_in_force=TimeInForce.DAY,
+        client_order_id=_order_id(f"opt-{side_label}-{option_symbol[:6]}"),
     )
     return _trading_client().submit_order(order)
 
