@@ -245,6 +245,7 @@ def start():
     schedule.every(wheel_min).minutes.do(_run_wheel)
     schedule.every(analyze_min).minutes.do(_run_analyze)
     schedule.every().day.at(summary_time).do(_run_daily_summary)
+    schedule.every(1).minutes.do(_poll_telegram)
 
     from core.notifier import is_configured, send_message, register_command
     register_command("/summary", "portfolio snapshot with today & total P&L", _run_daily_summary)
