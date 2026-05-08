@@ -210,3 +210,104 @@ class TestCheckManageZeroPremium:
         mock_submit.assert_called_once()
         assert len(result["actions"]) == 1
         assert "Stage 1→2" in result["actions"][0]
+
+
+# ── check_and_manage: wheel disabled ─────────────────────────────────────────
+
+class TestCheckManageDisabled:
+    @patch("strategies.wheel._settings", return_value={**WHEEL_SETTINGS, "enabled": False})
+    def test_returns_disabled_status_when_wheel_off(self, mock_settings):
+        from strategies.wheel import check_and_manage
+        result = check_and_manage()
+        assert result == {"status": "wheel disabled"}
+
+    @patch("strategies.wheel.get_latest_price")
+    @patch("strategies.wheel._settings", return_value={**WHEEL_SETTINGS, "enabled": False})
+    def test_no_api_calls_when_disabled(self, mock_settings, mock_price):
+        from strategies.wheel import check_and_manage
+        check_and_manage()
+        mock_price.assert_not_called()
+
+
+# ── check_and_manage: stage 2→1 success path ─────────────────────────────────
+
+class TestCheckManageStage2Success:
+    @patch("strategies.wheel.save_state")
+    @patch("strategies.wheel.log_trade")
+    @patch("strategies.wheel.submit_option_order")
+    @patch("strategies.wheel.get_option_mid_price", return_value=1.80)
+    @patch("strategies.wheel.get_latest_price", return_value=100.0)
+    @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
+    def test_stage2_positive_premium_submits_put(
+        self, mock_settings, mock_price, mock_premium, mock_submit, mock_log, mock_save
+    ):
+        """Stage 2 → 1 with a positive premium submits the put and logs the trade."""
+        state = _wheel_state("NVDA", stage=2)
+        with patch("strategies.wheel.load_state", return_value=state), \
+             patch("strategies.wheel.get_position", return_value=None):  # None = called away
+            from strategies.wheel import check_and_manage
+            result = check_and_manage()
+
+        mock_submit.assert_called_once()
+        mock_log.assert_called_once()
+        assert len(result["actions"]) == 1
+        assert "Stage 2→1" in result["actions"][0]
+
+    @patch("strategies.wheel.save_state")
+    @patch("strategies.wheel.log_trade")
+    @patch("strategies.wheel.submit_option_order")
+    @patch("strategies.wheel.get_option_mid_price", return_value=1.80)
+    @patch("strategies.wheel.get_latest_price", return_value=100.0)
+    @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
+    def test_stage2_updates_wheel_state_to_stage1(
+        self, mock_settings, mock_price, mock_premium, mock_submit, mock_log, mock_save
+    ):
+        """After a successful stage 2 → 1 transition, state records stage=1."""
+        state = _wheel_state("NVDA", stage=2)
+        with patch("strategies.wheel.load_state", return_value=state), \
+             patch("strategies.wheel.get_position", return_value=None):
+            from strategies.wheel import check_and_manage
+            check_and_manage()
+
+        saved = mock_save.call_args[0][0]
+        assert saved["wheel"]["NVDA"]["stage"] == 1
+
+
+# ── check_and_manage: exception handling ─────────────────────────────────────
+
+class TestCheckManageExceptions:
+    @patch("strategies.wheel.save_state")
+    @patch("strategies.wheel.submit_option_order", side_effect=RuntimeError("API error"))
+    @patch("strategies.wheel.get_option_mid_price", return_value=2.0)
+    @patch("strategies.wheel.get_latest_price", return_value=100.0)
+    @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
+    def test_stage1_exception_does_not_crash(
+        self, mock_settings, mock_price, mock_premium, mock_submit, mock_save
+    ):
+        """submit_option_order failure in stage 1 is caught; loop continues."""
+        mock_pos = MagicMock()
+        mock_pos.qty = "200"
+        state = _wheel_state("NVDA", stage=1)
+        with patch("strategies.wheel.load_state", return_value=state), \
+             patch("strategies.wheel.get_position", return_value=mock_pos):
+            from strategies.wheel import check_and_manage
+            result = check_and_manage()  # must not raise
+
+        assert result["actions"] == []
+
+    @patch("strategies.wheel.save_state")
+    @patch("strategies.wheel.submit_option_order", side_effect=RuntimeError("API error"))
+    @patch("strategies.wheel.get_option_mid_price", return_value=2.0)
+    @patch("strategies.wheel.get_latest_price", return_value=100.0)
+    @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
+    def test_stage2_exception_does_not_crash(
+        self, mock_settings, mock_price, mock_premium, mock_submit, mock_save
+    ):
+        """submit_option_order failure in stage 2 is caught; loop continues."""
+        state = _wheel_state("NVDA", stage=2)
+        with patch("strategies.wheel.load_state", return_value=state), \
+             patch("strategies.wheel.get_position", return_value=None):
+            from strategies.wheel import check_and_manage
+            result = check_and_manage()  # must not raise
+
+        assert result["actions"] == []

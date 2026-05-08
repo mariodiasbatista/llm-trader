@@ -632,3 +632,198 @@ class TestPostHttpErrors:
 
         assert result["ok"] is True
         assert len(result["result"]) == 1
+
+    @patch("core.notifier._token", return_value="test-token")
+    def test_post_debug_logs_at_level_1(self, _):
+        """At log level 1, _post logs the request and response via log.debug."""
+        import core.notifier as notifier
+        notifier._telegram_log_level = 1
+        try:
+            from core.notifier import _post
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status.return_value = None
+            mock_resp.json.return_value = {"ok": True}
+
+            with patch("requests.post", return_value=mock_resp), \
+                 patch("core.notifier.log") as mock_log:
+                _post("sendMessage", {"text": "hi"})
+
+            assert mock_log.debug.call_count == 2  # request log + response log
+        finally:
+            notifier._telegram_log_level = 2
+
+
+# ── _cfg exception handling ───────────────────────────────────────────────────
+
+class TestCfgException:
+    def test_cfg_returns_empty_dict_on_read_error(self, tmp_path):
+        """If credentials.json is unreadable, _cfg() returns {} silently."""
+        import core.notifier as notifier
+        real_creds = notifier.CREDS_FILE
+        notifier.CREDS_FILE = tmp_path / "nonexistent.json"
+        try:
+            from core.notifier import _cfg
+            result = _cfg()
+            assert result == {}
+        finally:
+            notifier.CREDS_FILE = real_creds
+
+    def test_is_configured_false_when_creds_unreadable(self, tmp_path):
+        import core.notifier as notifier
+        real_creds = notifier.CREDS_FILE
+        notifier.CREDS_FILE = tmp_path / "nonexistent.json"
+        try:
+            from core.notifier import is_configured
+            assert is_configured() is False
+        finally:
+            notifier.CREDS_FILE = real_creds
+
+
+# ── Alert level gating ────────────────────────────────────────────────────────
+
+class TestAlertLevelGating:
+    @patch("core.notifier.send_message")
+    def test_stop_alert_suppressed_at_level_0(self, mock_send):
+        """send_stop_alert (severity=3) is suppressed only when level=0 (off)."""
+        import core.notifier as notifier
+        notifier._telegram_log_level = 0
+        from core.notifier import send_stop_alert
+        send_stop_alert("AAPL", 140.0, 150.0)
+        mock_send.assert_not_called()
+        notifier._telegram_log_level = 2
+
+    @patch("core.notifier.send_message")
+    def test_stop_alert_sent_at_level_2(self, mock_send):
+        """stop alert (severity=3) is sent when level=2 because 3 >= 2."""
+        import core.notifier as notifier
+        notifier._telegram_log_level = 2
+        from core.notifier import send_stop_alert
+        send_stop_alert("AAPL", 140.0, 150.0)
+        mock_send.assert_called_once()
+        notifier._telegram_log_level = 2
+
+    @patch("core.notifier.send_message")
+    def test_ladder_alert_suppressed_at_level_3(self, mock_send):
+        """send_ladder_alert (severity=2) is suppressed at level=3 (error-only)."""
+        import core.notifier as notifier
+        notifier._telegram_log_level = 3
+        from core.notifier import send_ladder_alert
+        send_ladder_alert("TSLA", 10, 200.0, 0.2)
+        mock_send.assert_not_called()
+        notifier._telegram_log_level = 2
+
+    @patch("core.notifier.send_message")
+    def test_insufficient_funds_suppressed_at_level_3(self, mock_send):
+        """send_insufficient_funds_alert (severity=2) suppressed at level=3."""
+        import core.notifier as notifier
+        notifier._telegram_log_level = 3
+        from core.notifier import send_insufficient_funds_alert
+        send_insufficient_funds_alert("AAPL", 5000.0, 1000.0)
+        mock_send.assert_not_called()
+        notifier._telegram_log_level = 2
+
+    @patch("core.notifier.send_message")
+    def test_insufficient_funds_sent_at_level_2(self, mock_send):
+        import core.notifier as notifier
+        notifier._telegram_log_level = 2
+        from core.notifier import send_insufficient_funds_alert
+        send_insufficient_funds_alert("AAPL", 5000.0, 1000.0)
+        mock_send.assert_called_once()
+        assert "AAPL" in mock_send.call_args[0][0]
+        notifier._telegram_log_level = 2
+
+    @patch("core.notifier.send_message")
+    def test_send_summary_suppressed_at_level_0(self, mock_send):
+        import core.notifier as notifier
+        notifier._telegram_log_level = 0
+        from core.notifier import send_summary
+        send_summary("Portfolio: $100k")
+        mock_send.assert_not_called()
+        notifier._telegram_log_level = 2
+
+    @patch("core.notifier.send_message")
+    def test_send_summary_suppressed_at_level_3(self, mock_send):
+        import core.notifier as notifier
+        notifier._telegram_log_level = 3
+        from core.notifier import send_summary
+        send_summary("Portfolio: $100k")
+        mock_send.assert_not_called()
+        notifier._telegram_log_level = 2
+
+    @patch("core.notifier.send_message")
+    def test_send_summary_sent_at_level_2(self, mock_send):
+        import core.notifier as notifier
+        notifier._telegram_log_level = 2
+        from core.notifier import send_summary
+        send_summary("Portfolio: $100k")
+        mock_send.assert_called_once()
+        assert "Portfolio: $100k" in mock_send.call_args[0][0]
+        notifier._telegram_log_level = 2
+
+
+# ── /setlevel without argument ────────────────────────────────────────────────
+
+class TestSetlevelNoArgument:
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_setlevel_without_arg_sends_usage(self, mock_cfg, mock_send):
+        """/setlevel with no number sends usage instructions."""
+        from core.notifier import _handle_command
+        _handle_command("/setlevel")
+        mock_send.assert_called_once()
+        assert "Usage" in mock_send.call_args[0][0]
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_setlevel_with_text_arg_sends_usage(self, mock_cfg, mock_send):
+        """/setlevel abc (non-digit) sends usage instructions."""
+        from core.notifier import _handle_command
+        _handle_command("/setlevel abc")
+        mock_send.assert_called_once()
+        assert "Usage" in mock_send.call_args[0][0]
+
+
+# ── poll_approvals — callback edge cases ─────────────────────────────────────
+
+class TestPollApprovalsEdgeCases:
+    @patch("core.notifier._post")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_callback_without_colon_ignored(self, mock_cfg, mock_post):
+        """`data` without ':' should be silently ignored, not crash."""
+        import core.notifier as notifier
+        notifier._LAST_UPDATE_ID = 0
+        mock_post.side_effect = [
+            {"result": [{
+                "update_id": 5,
+                "callback_query": {"id": "cb1", "data": "nodatahere", "message": {"message_id": 1}},
+            }]},
+            {},  # answerCallbackQuery
+        ]
+        from core.notifier import poll_approvals
+        results = poll_approvals()
+        assert results == []
+
+    @patch("core.notifier._post")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_update_without_callback_or_message_ignored(self, mock_cfg, mock_post):
+        """An update with neither callback_query nor message is silently skipped."""
+        import core.notifier as notifier
+        notifier._LAST_UPDATE_ID = 0
+        mock_post.return_value = {"result": [{"update_id": 7}]}
+        from core.notifier import poll_approvals
+        results = poll_approvals()
+        assert results == []
+
+    @patch("core.notifier._post")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_non_slash_message_ignored(self, mock_cfg, mock_post):
+        """A plain text message (no '/') is not dispatched as a command."""
+        import core.notifier as notifier
+        notifier._LAST_UPDATE_ID = 0
+        mock_post.return_value = {"result": [{
+            "update_id": 8,
+            "message": {"text": "hello there"},
+        }]}
+        from core.notifier import poll_approvals
+        results = poll_approvals()
+        assert results == []

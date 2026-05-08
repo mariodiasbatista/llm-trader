@@ -290,3 +290,93 @@ class TestTrailingStopInputGuards:
 
         assert len(result["checked"]) == 1
         assert result["checked"][0]["symbol"] == "GOOD"
+
+
+class TestTrailingStopExceptionHandlers:
+    """Stop-sell failures and ladder-buy insufficient-funds paths."""
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.load_state")
+    @patch("strategies.trailing_stop.close_position", side_effect=RuntimeError("order rejected"))
+    @patch("strategies.trailing_stop.log_trade")
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings")
+    def test_stop_sell_exception_does_not_crash(
+        self, mock_settings, mock_positions, mock_log, mock_close, mock_load, mock_save
+    ):
+        """If close_position raises, the scheduler loop must not crash."""
+        mock_settings.return_value = SETTINGS["trailing_stop"]
+        mock_positions.return_value = [_make_position("AAPL", 88.0, 100.0)]
+        mock_load.return_value = _state_with("AAPL", 90.0, 100.0, 100.0, profit_stop_active=True)
+
+        from strategies.trailing_stop import check_and_update
+        result = check_and_update()  # must not raise
+
+        # Position was not removed from stopped_out because close failed
+        # but the loop completed
+        assert isinstance(result, dict)
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.load_state")
+    @patch("strategies.trailing_stop.market_buy")
+    @patch("strategies.trailing_stop.log_trade")
+    @patch("strategies.trailing_stop.get_account")
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings")
+    def test_ladder_buy_skipped_on_insufficient_funds(
+        self, mock_settings, mock_positions, mock_acct, mock_log, mock_buy, mock_load, mock_save
+    ):
+        """Ladder buy does not execute when buying_power < cost."""
+        mock_settings.return_value = SETTINGS["trailing_stop"]
+        mock_positions.return_value = [_make_position("TSLA", 79.0, 100.0)]
+        mock_acct.return_value.buying_power = "50.0"  # far too little
+        mock_load.return_value = _state_with("TSLA", 0.0, 100.0, 100.0, profit_stop_active=False)
+
+        from strategies.trailing_stop import check_and_update
+        result = check_and_update()
+
+        mock_buy.assert_not_called()
+        assert result["laddered"] == []
+
+    @patch("strategies.trailing_stop.send_insufficient_funds_alert")
+    @patch("strategies.trailing_stop.telegram_configured", return_value=True)
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.load_state")
+    @patch("strategies.trailing_stop.market_buy")
+    @patch("strategies.trailing_stop.get_account")
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings")
+    def test_insufficient_funds_alert_sent(
+        self, mock_settings, mock_positions, mock_acct, mock_buy,
+        mock_load, mock_save, mock_cfg, mock_alert
+    ):
+        """send_insufficient_funds_alert is called when ladder buy can't afford shares."""
+        mock_settings.return_value = SETTINGS["trailing_stop"]
+        mock_positions.return_value = [_make_position("TSLA", 79.0, 100.0)]
+        mock_acct.return_value.buying_power = "50.0"
+        mock_load.return_value = _state_with("TSLA", 0.0, 100.0, 100.0, profit_stop_active=False)
+
+        from strategies.trailing_stop import check_and_update
+        check_and_update()
+
+        mock_alert.assert_called_once()
+        assert mock_alert.call_args[0][0] == "TSLA"
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.load_state")
+    @patch("strategies.trailing_stop.market_buy", side_effect=RuntimeError("order failed"))
+    @patch("strategies.trailing_stop.get_account")
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings")
+    def test_ladder_buy_exception_does_not_crash(
+        self, mock_settings, mock_positions, mock_acct, mock_buy, mock_load, mock_save
+    ):
+        """If market_buy raises during a ladder buy, the loop continues without crashing."""
+        mock_settings.return_value = SETTINGS["trailing_stop"]
+        mock_positions.return_value = [_make_position("TSLA", 79.0, 100.0)]
+        mock_acct.return_value.buying_power = "10000.0"
+        mock_load.return_value = _state_with("TSLA", 0.0, 100.0, 100.0, profit_stop_active=False)
+
+        from strategies.trailing_stop import check_and_update
+        result = check_and_update()  # must not raise
+        assert isinstance(result, dict)
