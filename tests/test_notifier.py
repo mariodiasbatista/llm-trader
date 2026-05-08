@@ -1,6 +1,7 @@
 """Tests for core/notifier.py — Telegram notifications and approval flow."""
 import json
 import pytest
+import requests
 from unittest.mock import patch, MagicMock, call
 
 
@@ -574,3 +575,60 @@ class TestSummaryCommand:
         from core.notifier import load_log_level, get_log_level
         load_log_level()  # must not raise
         assert get_log_level() == 2  # unchanged
+
+
+# ── _post HTTP error handling ─────────────────────────────────────────────────
+
+class TestPostHttpErrors:
+    """_post handles 4xx/5xx responses gracefully via raise_for_status."""
+
+    @patch("core.notifier._token", return_value="test-token")
+    def test_post_returns_empty_dict_on_http_error(self, _):
+        """4xx/5xx from Telegram API returns {} instead of crashing."""
+        from core.notifier import _post
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = requests.HTTPError("403 Forbidden")
+
+        with patch("requests.post", return_value=mock_resp):
+            result = _post("sendMessage", {"chat_id": "123", "text": "hi"})
+
+        assert result == {}
+
+    @patch("core.notifier._token", return_value="test-token")
+    def test_post_returns_empty_dict_on_5xx(self, _):
+        """5xx server error also returns {} without raising."""
+        from core.notifier import _post
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = requests.HTTPError("500 Internal Server Error")
+
+        with patch("requests.post", return_value=mock_resp):
+            result = _post("getUpdates", {"offset": 0})
+
+        assert result == {}
+
+    @patch("core.notifier._token", return_value="test-token")
+    def test_post_calls_raise_for_status_on_success(self, _):
+        """raise_for_status is always called, even on successful responses."""
+        from core.notifier import _post
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = {"ok": True, "result": []}
+
+        with patch("requests.post", return_value=mock_resp):
+            _post("getUpdates", {"offset": 0})
+
+        mock_resp.raise_for_status.assert_called_once()
+
+    @patch("core.notifier._token", return_value="test-token")
+    def test_post_returns_result_on_success(self, _):
+        """Successful response still returns the parsed JSON."""
+        from core.notifier import _post
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = {"ok": True, "result": [{"update_id": 1}]}
+
+        with patch("requests.post", return_value=mock_resp):
+            result = _post("getUpdates", {"offset": 0})
+
+        assert result["ok"] is True
+        assert len(result["result"]) == 1

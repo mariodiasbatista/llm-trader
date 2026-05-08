@@ -531,3 +531,35 @@ class TestSchedulerTlogLevelVisibility:
             assert any("Processing NVDA" in t for t in sent_level1)
 
         notifier._telegram_log_level = 2  # reset
+
+
+# ── 5. Analyze subprocess timeout ─────────────────────────────────────────────
+
+class TestAnalyzeSubprocessTimeout:
+    """_run_analyze handles subprocess.TimeoutExpired without crashing the scheduler."""
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    @patch("scheduler.market_scheduler.is_market_open", return_value=True)
+    def test_timeout_does_not_raise(self, _open, _cfg, mock_send):
+        import subprocess
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="python", timeout=300)):
+            from scheduler.market_scheduler import _run_analyze
+            _run_analyze()  # must not propagate the exception
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    @patch("scheduler.market_scheduler.is_market_open", return_value=True)
+    def test_timeout_sends_error_to_telegram(self, _open, _cfg, mock_send):
+        import core.notifier as notifier
+        notifier._telegram_log_level = 2
+        import subprocess
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="python", timeout=300)):
+            from scheduler.market_scheduler import _run_analyze
+            _run_analyze()
+
+        sent = [c[0][0] for c in mock_send.call_args_list]
+        assert any("timed out" in t.lower() for t in sent), (
+            f"Expected timeout error in Telegram messages, got: {sent}"
+        )
+        notifier._telegram_log_level = 2  # reset

@@ -237,3 +237,56 @@ class TestTrailingStopLogic:
 
         mock_close.assert_not_called()
         assert "AAPL" not in result["stopped_out"]
+
+
+class TestTrailingStopInputGuards:
+    """Positions with zero or negative entry/price are skipped without crashing."""
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.load_state", side_effect=_base_state)
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings")
+    def test_zero_entry_price_skips_position(self, mock_settings, mock_positions, mock_load, mock_save):
+        """A position with avg_entry_price=0 must not cause division by zero."""
+        mock_settings.return_value = SETTINGS["trailing_stop"]
+        mock_positions.return_value = [_make_position("AAPL", 100.0, 0.0)]
+
+        from strategies.trailing_stop import check_and_update
+        result = check_and_update()
+
+        assert result["checked"] == []
+        assert result["stopped_out"] == []
+        assert result["laddered"] == []
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.load_state", side_effect=_base_state)
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings")
+    def test_zero_current_price_skips_position(self, mock_settings, mock_positions, mock_load, mock_save):
+        """A position with current_price=0 must not cause division by zero."""
+        mock_settings.return_value = SETTINGS["trailing_stop"]
+        mock_positions.return_value = [_make_position("AAPL", 0.0, 100.0)]
+
+        from strategies.trailing_stop import check_and_update
+        result = check_and_update()
+
+        assert result["checked"] == []
+        assert result["stopped_out"] == []
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.load_state", side_effect=_base_state)
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings")
+    def test_valid_position_processed_alongside_bad_entry(self, mock_settings, mock_positions, mock_load, mock_save):
+        """A zero-entry position is skipped but valid positions in the same batch are still processed."""
+        mock_settings.return_value = SETTINGS["trailing_stop"]
+        mock_positions.return_value = [
+            _make_position("BAD", 100.0, 0.0),
+            _make_position("GOOD", 100.0, 90.0),
+        ]
+
+        from strategies.trailing_stop import check_and_update
+        result = check_and_update()
+
+        assert len(result["checked"]) == 1
+        assert result["checked"][0]["symbol"] == "GOOD"
