@@ -348,3 +348,70 @@ class TestPollTelegramEdgeCases:
         from scheduler.market_scheduler import _poll_telegram
         _poll_telegram()
         mock_wheel.assert_called_once_with("AAPL", contracts=1)
+
+    @patch("core.logger.log_trade")
+    @patch("core.logger.save_state")
+    @patch("core.logger.load_state")
+    @patch("core.alpaca.trailing_stop_sell")
+    @patch("core.alpaca.market_buy")
+    @patch("core.alpaca.get_latest_price", return_value=150.0)
+    @patch("core.alpaca.get_account")
+    @patch("core.notifier.send_message")
+    @patch("core.notifier._post")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_trailing_stop_with_stop_floor_calls_trailing_stop_sell(
+        self, mock_cfg, mock_post, mock_send, mock_acct,
+        mock_price, mock_buy, mock_trailing, mock_load, mock_save, mock_log
+    ):
+        """When a TRAILING_STOP approval includes a stop_floor, trailing_stop_sell is called."""
+        import core.notifier as notifier
+        notifier._LAST_UPDATE_ID = 0
+        mock_acct.return_value = _mock_account(buying_power=50000.0)
+        state = {
+            "pending_trades": {
+                "2026-05-08_AAPL_P001": {
+                    "ticker": "AAPL",
+                    "strategy": "TRAILING_STOP",
+                    "confidence": 85,
+                    "reasoning": "momentum",
+                    "price": 150.0,
+                    "politician": "McCaul",
+                    "position_pct": 0.05,
+                    "stop_floor": 10,
+                }
+            },
+            "positions": {}, "wheel": {}, "copied_trades": [],
+        }
+        mock_load.return_value = state
+        mock_post.side_effect = [{"result": [self._approve_update()]}, {}, {}]
+
+        from scheduler.market_scheduler import _poll_telegram
+        _poll_telegram()
+
+        mock_trailing.assert_called_once()
+
+    @patch("core.logger.log_trade")
+    @patch("core.logger.save_state")
+    @patch("core.logger.load_state")
+    @patch("core.alpaca.market_buy", side_effect=RuntimeError("order rejected"))
+    @patch("core.alpaca.get_latest_price", return_value=150.0)
+    @patch("core.alpaca.get_account")
+    @patch("core.notifier.send_message")
+    @patch("core.notifier._post")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_execution_exception_sends_error_message(
+        self, mock_cfg, mock_post, mock_send, mock_acct,
+        mock_price, mock_buy, mock_load, mock_save, mock_log
+    ):
+        """If market_buy raises, an ❌ error message is sent to Telegram."""
+        import core.notifier as notifier
+        notifier._LAST_UPDATE_ID = 0
+        mock_acct.return_value = _mock_account(buying_power=50000.0)
+        mock_load.return_value = self._make_pending(strategy="TRAILING_STOP")
+        mock_post.side_effect = [{"result": [self._approve_update()]}, {}, {}]
+
+        from scheduler.market_scheduler import _poll_telegram
+        _poll_telegram()  # must not raise
+
+        sent = [c[0][0] for c in mock_send.call_args_list]
+        assert any("❌" in t for t in sent)
