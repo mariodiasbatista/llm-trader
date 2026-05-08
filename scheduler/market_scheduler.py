@@ -184,6 +184,48 @@ def _poll_telegram():
         save_state(state)
 
 
+def _run_portfolio():
+    """Send a full portfolio snapshot to Telegram on demand (/portfolio command)."""
+    from core.alpaca import get_account, get_positions
+    from core.logger import load_state
+    from core.notifier import send_message
+    acct = get_account()
+    positions = get_positions()
+    state = load_state()
+
+    day_pnl = float(acct.equity) - float(acct.last_equity)
+    day_icon = "🟢" if day_pnl >= 0 else "🔴"
+
+    lines = [
+        f"📊 *Portfolio — {datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M')} ET*\n",
+        f"💼 *Account*",
+        f"Portfolio:     ${float(acct.portfolio_value):>12,.2f}",
+        f"Cash:          ${float(acct.cash):>12,.2f}",
+        f"Buying Power:  ${float(acct.buying_power):>12,.2f}",
+        f"Day P&L:       {day_icon} ${day_pnl:>+,.2f}",
+    ]
+
+    if positions:
+        lines.append(f"\n📈 *Positions*")
+        for p in positions:
+            floor = state.get("positions", {}).get(p.symbol, {}).get("stop_floor")
+            total_pl = float(p.unrealized_pl)
+            today_pl = float(p.unrealized_intraday_pl)
+            total_pct = float(p.unrealized_plpc) * 100
+            today_pct = float(p.unrealized_intraday_plpc) * 100
+            total_icon = "🟢" if total_pl >= 0 else "🔴"
+            floor_str = f"  Stop ${floor:.2f}" if floor else ""
+            lines.append(
+                f"`{p.symbol}` {p.qty}sh @ ${float(p.avg_entry_price):.2f} → ${float(p.current_price):.2f}\n"
+                f"  {total_icon} Total ${total_pl:+,.2f} ({total_pct:+.1f}%)  "
+                f"Today ${today_pl:+,.2f} ({today_pct:+.1f}%){floor_str}"
+            )
+    else:
+        lines.append("\n_No open positions._")
+
+    send_message("\n".join(lines))
+
+
 def _run_daily_summary():
     from core.alpaca import get_account, get_positions
     from core.logger import load_state
@@ -255,6 +297,7 @@ def start():
 
     from core.notifier import is_configured, send_message, register_command
     register_command("/summary", "portfolio snapshot with today & total P&L", _run_daily_summary)
+    register_command("/portfolio", "full portfolio snapshot with entry prices and stops", _run_portfolio)
     telegram_status = "enabled" if is_configured() else "not configured"
     tlog(
         f"Scheduler started | trailing={trailing_min}min | "
