@@ -318,6 +318,7 @@ class TestPollTelegramEdgeCases:
         from scheduler.market_scheduler import _poll_telegram
         _poll_telegram()  # must not raise
 
+    @patch("core.logger.log_trade")
     @patch("core.logger.save_state")
     @patch("core.logger.load_state")
     @patch("strategies.wheel.start_wheel")
@@ -328,7 +329,7 @@ class TestPollTelegramEdgeCases:
     @patch("core.notifier.is_configured", return_value=True)
     def test_wheel_strategy_calls_start_wheel(
         self, mock_cfg, mock_post, mock_send, mock_acct,
-        mock_price, mock_wheel, mock_load, mock_save
+        mock_price, mock_wheel, mock_load, mock_save, mock_log
     ):
         """Approving a WHEEL trade calls start_wheel."""
         import core.notifier as notifier

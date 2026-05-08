@@ -207,6 +207,7 @@ class TestTelegramApproveExecutesTrade:
             "copied_trades": [],
         }
 
+    @patch("core.logger.log_trade")
     @patch("core.logger.save_state")
     @patch("core.logger.load_state")
     @patch("core.alpaca.market_buy")
@@ -217,7 +218,7 @@ class TestTelegramApproveExecutesTrade:
     @patch("core.notifier.is_configured", return_value=True)
     def test_approve_calls_market_buy(
         self, mock_cfg, mock_post, mock_send, mock_acct,
-        mock_price, mock_buy, mock_load, mock_save
+        mock_price, mock_buy, mock_load, mock_save, mock_log
     ):
         """Approve callback triggers market_buy for the pending NVDA trade."""
         import core.notifier as notifier
@@ -239,6 +240,7 @@ class TestTelegramApproveExecutesTrade:
         assert args[0] == "NVDA"
         assert args[1] >= 1  # at least 1 share
 
+    @patch("core.logger.log_trade")
     @patch("core.logger.save_state")
     @patch("core.logger.load_state")
     @patch("core.alpaca.market_buy")
@@ -249,7 +251,7 @@ class TestTelegramApproveExecutesTrade:
     @patch("core.notifier.is_configured", return_value=True)
     def test_approve_sends_confirmation_message(
         self, mock_cfg, mock_post, mock_send, mock_acct,
-        mock_price, mock_buy, mock_load, mock_save
+        mock_price, mock_buy, mock_load, mock_save, mock_log
     ):
         """Confirmation message with ✅ and NVDA ticker is sent after approve."""
         import core.notifier as notifier
@@ -271,6 +273,7 @@ class TestTelegramApproveExecutesTrade:
             f"Expected a ✅ NVDA confirmation in Telegram messages, got: {sent_texts}"
         )
 
+    @patch("core.logger.log_trade")
     @patch("core.logger.save_state")
     @patch("core.logger.load_state")
     @patch("core.alpaca.market_buy")
@@ -281,7 +284,7 @@ class TestTelegramApproveExecutesTrade:
     @patch("core.notifier.is_configured", return_value=True)
     def test_approve_removes_trade_from_pending(
         self, mock_cfg, mock_post, mock_send, mock_acct,
-        mock_price, mock_buy, mock_load, mock_save
+        mock_price, mock_buy, mock_load, mock_save, mock_log
     ):
         """Approved trade is removed from pending_trades in saved state."""
         import core.notifier as notifier
@@ -297,6 +300,7 @@ class TestTelegramApproveExecutesTrade:
         saved_state = mock_save.call_args[0][0]
         assert TRADE_KEY not in saved_state.get("pending_trades", {})
 
+    @patch("core.logger.log_trade")
     @patch("core.logger.save_state")
     @patch("core.logger.load_state")
     @patch("core.alpaca.market_buy")
@@ -307,7 +311,7 @@ class TestTelegramApproveExecutesTrade:
     @patch("core.notifier.is_configured", return_value=True)
     def test_approve_marks_trade_as_copied(
         self, mock_cfg, mock_post, mock_send, mock_acct,
-        mock_price, mock_buy, mock_load, mock_save
+        mock_price, mock_buy, mock_load, mock_save, mock_log
     ):
         """Trade key lands in copied_trades after approval so it won't re-process."""
         import core.notifier as notifier

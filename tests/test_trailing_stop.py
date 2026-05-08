@@ -316,6 +316,7 @@ class TestTrailingStopExceptionHandlers:
         # but the loop completed
         assert isinstance(result, dict)
 
+    @patch("strategies.trailing_stop.telegram_configured", return_value=False)
     @patch("strategies.trailing_stop.save_state")
     @patch("strategies.trailing_stop.load_state")
     @patch("strategies.trailing_stop.market_buy")
@@ -324,7 +325,7 @@ class TestTrailingStopExceptionHandlers:
     @patch("strategies.trailing_stop.get_positions")
     @patch("strategies.trailing_stop._settings")
     def test_ladder_buy_skipped_on_insufficient_funds(
-        self, mock_settings, mock_positions, mock_acct, mock_log, mock_buy, mock_load, mock_save
+        self, mock_settings, mock_positions, mock_acct, mock_log, mock_buy, mock_load, mock_save, mock_tg
     ):
         """Ladder buy does not execute when buying_power < cost."""
         mock_settings.return_value = SETTINGS["trailing_stop"]
