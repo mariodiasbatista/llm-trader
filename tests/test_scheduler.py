@@ -127,6 +127,8 @@ class TestRunWheel:
 
 class TestRunPortfolio:
     def _run(self, positions, state=None, acct=None):
+        import core.notifier as notifier
+        notifier._telegram_log_level = 2
         if acct is None:
             acct = _mock_account()
         if state is None:
@@ -135,8 +137,9 @@ class TestRunPortfolio:
              patch("core.alpaca.get_positions", return_value=positions), \
              patch("core.logger.load_state", return_value=state), \
              patch("core.notifier.send_message") as mock_send:
-            from scheduler.market_scheduler import _run_portfolio
-            _run_portfolio()
+            from scheduler.market_scheduler import _run_daily_summary
+            _run_daily_summary()
+            notifier._telegram_log_level = 2
             return mock_send.call_args[0][0]
 
     def test_sends_portfolio_value(self):
