@@ -15,7 +15,7 @@ import argparse
 from datetime import datetime
 
 from core.alpaca import get_account, get_positions, market_buy, get_latest_price, trailing_stop_sell
-from core.logger import load_state, save_state, log_trade, log
+from core.logger import load_state, save_state, log_trade, log, state_lock
 from core.notifier import is_configured as telegram_configured, send_message, send_insufficient_funds_alert
 from strategies.smart_money import fetch_trades, fetch_large_trades
 from strategies.wheel import start_wheel
@@ -69,6 +69,7 @@ def main():
     buying_power = float(acct.buying_power)
     existing_tickers = [p.symbol for p in get_positions()]
     state = load_state()
+    processed_keys = []
     results = []
     tokens_saved_total = 0
 
@@ -197,11 +198,17 @@ def main():
         finally:
             # Always mark signal as processed — prevents infinite retry on failure.
             # Insufficient-funds signals are excluded (they use `continue` above).
-            state.setdefault("copied_trades", []).append(trade_key)
+            processed_keys.append(trade_key)
 
         results.append(result)
 
-    save_state(state)
+    with state_lock():
+        fresh = load_state()
+        existing = set(fresh.get("copied_trades", []))
+        for key in processed_keys:
+            if key not in existing:
+                fresh.setdefault("copied_trades", []).append(key)
+        save_state(fresh)
 
     # Print run summary
     executed = [r for r in results if r.get("executed")]

@@ -18,7 +18,7 @@ from pathlib import Path
 import requests
 
 from core.alpaca import market_buy, get_latest_price, get_account
-from core.logger import load_state, save_state, log_trade, log
+from core.logger import load_state, save_state, log_trade, log, state_lock
 
 SETTINGS_FILE = Path(__file__).parent.parent / "config" / "settings.json"
 CAPITOL_TRADES_URL = "https://bff.capitoltrades.com/trades"
@@ -336,37 +336,38 @@ def check_and_copy() -> dict:
     actions = []
 
     if auto_copy and buy_signals:
-        state = load_state()
         acct = get_account()
         buying_power = float(acct.buying_power)
+        with state_lock():
+            state = load_state()
 
-        for trade in buy_signals:
-            ticker = trade.get("asset", {}).get("ticker", "")
-            if not ticker or not ticker.replace(".", "").isalpha():
-                continue
-
-            trade_key = f"{trade.get('txDate')}_{ticker}_{trade.get('politician', {}).get('id', '')}"
-            if trade_key in state.get("copied_trades", []):
-                continue
-
-            try:
-                price = get_latest_price(ticker)
-                shares = max(1, int(min_value / price))
-                cost = shares * price
-                if buying_power < cost:
+            for trade in buy_signals:
+                ticker = trade.get("asset", {}).get("ticker", "")
+                if not ticker or not ticker.replace(".", "").isalpha():
                     continue
-                market_buy(ticker, shares)
-                log_trade(
-                    "SMART_BUY", ticker, shares, price,
-                    f"copying {trade.get('politician', {}).get('name', 'unknown')}"
-                )
-                state.setdefault("copied_trades", []).append(trade_key)
-                buying_power -= cost
-                actions.append(f"Copied: {shares} {ticker} @ ${price:.2f}")
-            except Exception as e:
-                log.error(f"Failed to copy {ticker}: {e}")
 
-        save_state(state)
+                trade_key = f"{trade.get('txDate')}_{ticker}_{trade.get('politician', {}).get('id', '')}"
+                if trade_key in state.get("copied_trades", []):
+                    continue
+
+                try:
+                    price = get_latest_price(ticker)
+                    shares = max(1, int(min_value / price))
+                    cost = shares * price
+                    if buying_power < cost:
+                        continue
+                    market_buy(ticker, shares)
+                    log_trade(
+                        "SMART_BUY", ticker, shares, price,
+                        f"copying {trade.get('politician', {}).get('name', 'unknown')}"
+                    )
+                    state.setdefault("copied_trades", []).append(trade_key)
+                    buying_power -= cost
+                    actions.append(f"Copied: {shares} {ticker} @ ${price:.2f}")
+                except Exception as e:
+                    log.error(f"Failed to copy {ticker}: {e}")
+
+            save_state(state)
 
     return {
         "trades_found": len(all_trades),
