@@ -216,7 +216,6 @@ def _handle_command(text: str) -> None:
     if cmd[0] == "/help":
         lines = ["*LLM Trader — Available Commands*\n"]
         lines.append("`/help` — show this message")
-        lines.append("`/summary` — portfolio snapshot with today & total P&L per position")
         lines.append("`/loglevel` — show current Telegram log level")
         lines.append("`/setlevel N` — set log level (0=off 1=debug 2=info 3=errors only)")
         for cmd_name, (desc, _) in sorted(_command_registry.items()):

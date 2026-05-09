@@ -480,7 +480,6 @@ class TestHelpCommand:
         mock_send.assert_called_once()
         text = mock_send.call_args[0][0]
         assert "/help" in text
-        assert "/summary" in text
         assert "/loglevel" in text
         assert "/setlevel" in text
 
