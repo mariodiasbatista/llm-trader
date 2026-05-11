@@ -136,7 +136,7 @@ def tlog(message: str, severity: int = 2) -> None:
     if _telegram_log_level == 0:
         return
     if severity >= _telegram_log_level:
-        send_message(message)
+        send_message(escape_md(message))
 
 
 def send_trade_approval(trade_key: str, ticker: str, strategy: str,

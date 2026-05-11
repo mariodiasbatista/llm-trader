@@ -94,7 +94,8 @@ def _run_analyze():
         return
     if result.stdout:
         for line in result.stdout.strip().splitlines():
-            tlog(f"  {escape_md(line)}", 1)  # debug — full subprocess output
+            if line.strip():
+                tlog(f"  {escape_md(line)}", 1)  # debug — full subprocess output
     if result.returncode != 0 and result.stderr:
         tlog(f"analyze error: {escape_md(result.stderr[:200])}", 3)
 
