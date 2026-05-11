@@ -297,7 +297,7 @@ class TestTlog:
         notifier._telegram_log_level = 2
         from core.notifier import tlog
         tlog("flow step", 2)
-        mock_send.assert_called_once_with("flow step")
+        mock_send.assert_called_once_with("flow step", parse_mode=None)
 
     @patch("core.notifier.send_message")
     @patch("core.notifier.is_configured", return_value=True)
@@ -315,7 +315,7 @@ class TestTlog:
         notifier._telegram_log_level = 1
         from core.notifier import tlog
         tlog("api call", 1)
-        mock_send.assert_called_once_with("api call")
+        mock_send.assert_called_once_with("api call", parse_mode=None)
         notifier._telegram_log_level = 2
 
     @patch("core.notifier.send_message")
@@ -335,7 +335,7 @@ class TestTlog:
         notifier._telegram_log_level = 3
         from core.notifier import tlog
         tlog("boom", 3)
-        mock_send.assert_called_once_with("boom")
+        mock_send.assert_called_once_with("boom", parse_mode=None)
         notifier._telegram_log_level = 2
 
     @patch("core.notifier.send_message")

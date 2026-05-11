@@ -110,14 +110,13 @@ def _post(method: str, payload: dict) -> dict:
         return {}
 
 
-def send_message(text: str) -> None:
+def send_message(text: str, parse_mode: str = "Markdown") -> None:
     if not is_configured():
         return
-    _post("sendMessage", {
-        "chat_id": _chat_id(),
-        "text": text,
-        "parse_mode": "Markdown",
-    })
+    payload: dict = {"chat_id": _chat_id(), "text": text}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    _post("sendMessage", payload)
 
 
 def tlog(message: str, severity: int = 2) -> None:
@@ -136,7 +135,7 @@ def tlog(message: str, severity: int = 2) -> None:
     if _telegram_log_level == 0:
         return
     if severity >= _telegram_log_level:
-        send_message(escape_md(message))
+        send_message(message, parse_mode=None)
 
 
 def send_trade_approval(trade_key: str, ticker: str, strategy: str,
