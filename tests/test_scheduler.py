@@ -1,7 +1,16 @@
 """Tests for scheduler/market_scheduler.py — portfolio command, daily summary,
 market-hours gate, wheel runner, ladder alert forwarding, and poll edge cases."""
 import pytest
+from datetime import datetime as real_dt
+import pytz
 from unittest.mock import patch, MagicMock, call
+
+_NY = pytz.timezone("America/New_York")
+
+
+def _monday(hour, minute=0):
+    """Return a tz-aware Monday ET datetime for time-based tests."""
+    return real_dt(2026, 5, 11, hour, minute, 0, tzinfo=_NY)
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -415,3 +424,193 @@ class TestPollTelegramEdgeCases:
 
         sent = [c[0][0] for c in mock_send.call_args_list]
         assert any("❌" in t for t in sent)
+
+
+# ── is_market_open — weekday branches ────────────────────────────────────────
+
+class TestIsMarketOpenWeekday:
+    def test_returns_true_during_market_hours(self):
+        with patch("scheduler.market_scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = _monday(10, 0)
+            from scheduler.market_scheduler import is_market_open
+            assert is_market_open() is True
+
+    def test_returns_false_before_market_open(self):
+        with patch("scheduler.market_scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = _monday(8, 0)
+            from scheduler.market_scheduler import is_market_open
+            assert is_market_open() is False
+
+    def test_returns_false_after_market_close(self):
+        with patch("scheduler.market_scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = _monday(17, 0)
+            from scheduler.market_scheduler import is_market_open
+            assert is_market_open() is False
+
+
+# ── _run_analyze ──────────────────────────────────────────────────────────────
+
+class TestRunAnalyze:
+    @patch("scheduler.market_scheduler.is_market_open", return_value=False)
+    def test_analyze_skipped_when_market_closed(self, _open):
+        with patch("subprocess.run") as mock_sub:
+            from scheduler.market_scheduler import _run_analyze
+            _run_analyze()
+            mock_sub.assert_not_called()
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    @patch("subprocess.run")
+    @patch("scheduler.market_scheduler.is_market_open", return_value=True)
+    def test_analyze_logs_stderr_on_nonzero_exit(self, _open, mock_sub, _cfg, mock_send):
+        import core.notifier as notifier
+        notifier._telegram_log_level = 2
+        mock_sub.return_value = MagicMock(stdout="", stderr="failure detail", returncode=1)
+        from scheduler.market_scheduler import _run_analyze
+        _run_analyze()
+        sent = [c[0][0] for c in mock_send.call_args_list]
+        assert any("failure detail" in t for t in sent)
+        notifier._telegram_log_level = 2
+
+
+# ── _poll_telegram — not configured / no approvals / insufficient funds ───────
+
+class TestPollTelegramGates:
+    @patch("core.notifier.is_configured", return_value=False)
+    def test_poll_skips_when_not_configured(self, _cfg):
+        with patch("core.alpaca.get_account") as mock_acct:
+            from scheduler.market_scheduler import _poll_telegram
+            _poll_telegram()
+            mock_acct.assert_not_called()
+
+    @patch("core.notifier.poll_approvals", return_value=[])
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_poll_returns_early_when_no_approvals(self, _cfg, _approvals):
+        with patch("core.alpaca.get_account") as mock_acct:
+            from scheduler.market_scheduler import _poll_telegram
+            _poll_telegram()
+            mock_acct.assert_not_called()
+
+    @patch("core.logger.save_state")
+    @patch("core.logger.load_state")
+    @patch("core.alpaca.get_latest_price", return_value=150.0)
+    @patch("core.alpaca.get_account")
+    @patch("core.notifier.send_message")
+    @patch("core.notifier._post")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_insufficient_buying_power_sends_warning(
+        self, _cfg, mock_post, mock_send, mock_acct, _price, mock_load, mock_save
+    ):
+        import core.notifier as notifier
+        notifier._LAST_UPDATE_ID = 0
+        mock_acct.return_value = _mock_account(buying_power=1.0)
+        mock_load.return_value = {
+            "pending_trades": {
+                "2026-05-08_AAPL_P001": {
+                    "ticker": "AAPL", "strategy": "TRAILING_STOP",
+                    "position_pct": 0.05, "stop_floor": None,
+                }
+            },
+            "positions": {}, "wheel": {}, "copied_trades": [],
+        }
+        mock_post.side_effect = [
+            {"result": [{
+                "update_id": 99,
+                "callback_query": {
+                    "id": "cb1",
+                    "data": "approve:2026-05-08_AAPL_P001",
+                    "message": {"message_id": 1},
+                },
+            }]},
+            {}, {},
+        ]
+        from scheduler.market_scheduler import _poll_telegram
+        _poll_telegram()
+        sent = [c[0][0] for c in mock_send.call_args_list]
+        assert any("⚠️" in t or "Insufficient" in t for t in sent)
+        notifier._telegram_log_level = 2
+
+
+# ── _build_schedule_message ───────────────────────────────────────────────────
+
+class TestBuildScheduleMessage:
+    def _msg(self, hour, minute=0):
+        with patch("scheduler.market_scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = _monday(hour, minute)
+            mock_dt.strptime.side_effect = real_dt.strptime
+            from scheduler.market_scheduler import _build_schedule_message
+            return _build_schedule_message()
+
+    def test_header_contains_date_and_brand(self):
+        msg = self._msg(10)
+        assert "2026-05-11" in msg
+        assert "LLM Trader" in msg
+
+    def test_pre_market_all_upcoming(self):
+        msg = self._msg(8)
+        assert "🔄" not in msg
+        assert "✅" not in msg
+        assert "⬜" in msg
+
+    def test_during_market_recurring_tasks_active(self):
+        msg = self._msg(11)
+        assert "🔄" in msg
+        assert "Trailing Stop" in msg
+
+    def test_after_close_recurring_tasks_completed(self):
+        msg = self._msg(17)
+        assert "✅" in msg
+        assert "⬜" not in msg
+
+    def test_contains_current_time(self):
+        msg = self._msg(10, 30)
+        assert "10:30 AM ET" in msg
+
+
+# ── _send_schedule ────────────────────────────────────────────────────────────
+
+class TestSendSchedule:
+    @patch("core.notifier.send_message")
+    @patch("scheduler.market_scheduler._build_schedule_message", return_value="sched_text")
+    def test_delegates_to_send_message(self, _build, mock_send):
+        from scheduler.market_scheduler import _send_schedule
+        _send_schedule()
+        mock_send.assert_called_once_with("sched_text")
+
+
+# ── start() — command registration ───────────────────────────────────────────
+
+class TestStart:
+    @patch("scheduler.market_scheduler._run_trailing_stop")
+    @patch("scheduler.market_scheduler.schedule")
+    @patch("time.sleep", side_effect=KeyboardInterrupt)
+    @patch("core.notifier.is_configured", return_value=False)
+    @patch("core.notifier.register_command")
+    @patch("core.logger.save_state")
+    @patch("core.logger.load_state", return_value={"pending_trades": {"stale": {}}})
+    def test_registers_summary_and_schedule_commands(
+        self, _load, _save, mock_reg, _cfg, _sleep, _sched, _trailing
+    ):
+        from scheduler.market_scheduler import start
+        with pytest.raises(KeyboardInterrupt):
+            start()
+        registered = [c[0][0] for c in mock_reg.call_args_list]
+        assert "/summary" in registered
+        assert "/schedule" in registered
+
+    @patch("scheduler.market_scheduler._run_trailing_stop")
+    @patch("scheduler.market_scheduler.schedule")
+    @patch("time.sleep", side_effect=KeyboardInterrupt)
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    @patch("core.notifier.register_command")
+    @patch("core.logger.save_state")
+    @patch("core.logger.load_state", return_value={"pending_trades": {}})
+    def test_sends_startup_message_when_configured(
+        self, _load, _save, _reg, _cfg, mock_send, _sleep, _sched, _trailing
+    ):
+        from scheduler.market_scheduler import start
+        with pytest.raises(KeyboardInterrupt):
+            start()
+        sent = [c[0][0] for c in mock_send.call_args_list]
+        assert any("LLM Trader started" in t for t in sent)
