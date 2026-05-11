@@ -626,6 +626,17 @@ class TestPostHttpErrors:
         assert "can't parse entities" in warning_text
 
     @patch("core.notifier._token", return_value="test-token")
+    def test_post_returns_empty_dict_on_network_error(self, _):
+        """Network-level exceptions (timeout, connection reset) return {} without raising."""
+        import requests
+        from core.notifier import _post
+        with patch("requests.post", side_effect=requests.ConnectionError("connection reset")), \
+             patch("core.notifier.log") as mock_log:
+            result = _post("sendMessage", {"text": "hi"})
+        assert result == {}
+        assert mock_log.warning.called
+
+    @patch("core.notifier._token", return_value="test-token")
     def test_post_returns_result_on_success(self, _):
         """Successful response still returns the parsed JSON."""
         from core.notifier import _post
