@@ -73,6 +73,10 @@ def check_and_update() -> dict:
 
             ps = state["positions"][symbol]
 
+            # Backfill flag for positions bootstrapped before this field existed
+            if "profit_stop_active" not in ps:
+                ps["profit_stop_active"] = ps.get("stop_floor", 0) > 0
+
             if not ps.get("profit_stop_active", False):
                 # Profit-target mode: activate once target is reached
                 if profit_target_pct > 0 and gain_pct >= profit_target_pct:
