@@ -98,7 +98,9 @@ def _post(method: str, payload: dict) -> dict:
             json=payload,
             timeout=10,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            log.warning(f"Telegram API error ({method}): {resp.status_code} {resp.json()}")
+            return {}
         result = resp.json()
         if _telegram_log_level == 1:
             log.debug(f"[telegram] ← {result}")

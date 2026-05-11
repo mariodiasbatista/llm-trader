@@ -579,14 +579,16 @@ class TestSummaryCommand:
 # ── _post HTTP error handling ─────────────────────────────────────────────────
 
 class TestPostHttpErrors:
-    """_post handles 4xx/5xx responses gracefully via raise_for_status."""
+    """_post handles 4xx/5xx responses gracefully via resp.ok check."""
 
     @patch("core.notifier._token", return_value="test-token")
     def test_post_returns_empty_dict_on_http_error(self, _):
-        """4xx/5xx from Telegram API returns {} instead of crashing."""
+        """4xx from Telegram API returns {} instead of crashing."""
         from core.notifier import _post
         mock_resp = MagicMock()
-        mock_resp.raise_for_status.side_effect = requests.HTTPError("403 Forbidden")
+        mock_resp.ok = False
+        mock_resp.status_code = 400
+        mock_resp.json.return_value = {"ok": False, "description": "Bad Request: can't parse entities"}
 
         with patch("requests.post", return_value=mock_resp):
             result = _post("sendMessage", {"chat_id": "123", "text": "hi"})
@@ -598,7 +600,9 @@ class TestPostHttpErrors:
         """5xx server error also returns {} without raising."""
         from core.notifier import _post
         mock_resp = MagicMock()
-        mock_resp.raise_for_status.side_effect = requests.HTTPError("500 Internal Server Error")
+        mock_resp.ok = False
+        mock_resp.status_code = 500
+        mock_resp.json.return_value = {"ok": False, "description": "Internal Server Error"}
 
         with patch("requests.post", return_value=mock_resp):
             result = _post("getUpdates", {"offset": 0})
@@ -606,24 +610,27 @@ class TestPostHttpErrors:
         assert result == {}
 
     @patch("core.notifier._token", return_value="test-token")
-    def test_post_calls_raise_for_status_on_success(self, _):
-        """raise_for_status is always called, even on successful responses."""
+    def test_post_logs_description_on_error(self, _):
+        """Error response body (description) is included in the warning log."""
         from core.notifier import _post
         mock_resp = MagicMock()
-        mock_resp.raise_for_status.return_value = None
-        mock_resp.json.return_value = {"ok": True, "result": []}
+        mock_resp.ok = False
+        mock_resp.status_code = 400
+        mock_resp.json.return_value = {"ok": False, "description": "Bad Request: can't parse entities"}
 
-        with patch("requests.post", return_value=mock_resp):
-            _post("getUpdates", {"offset": 0})
+        with patch("requests.post", return_value=mock_resp), \
+             patch("core.notifier.log") as mock_log:
+            _post("sendMessage", {"text": "bad"})
 
-        mock_resp.raise_for_status.assert_called_once()
+        warning_text = " ".join(str(a) for a in mock_log.warning.call_args[0])
+        assert "can't parse entities" in warning_text
 
     @patch("core.notifier._token", return_value="test-token")
     def test_post_returns_result_on_success(self, _):
         """Successful response still returns the parsed JSON."""
         from core.notifier import _post
         mock_resp = MagicMock()
-        mock_resp.raise_for_status.return_value = None
+        mock_resp.ok = True
         mock_resp.json.return_value = {"ok": True, "result": [{"update_id": 1}]}
 
         with patch("requests.post", return_value=mock_resp):
@@ -640,7 +647,7 @@ class TestPostHttpErrors:
         try:
             from core.notifier import _post
             mock_resp = MagicMock()
-            mock_resp.raise_for_status.return_value = None
+            mock_resp.ok = True
             mock_resp.json.return_value = {"ok": True}
 
             with patch("requests.post", return_value=mock_resp), \

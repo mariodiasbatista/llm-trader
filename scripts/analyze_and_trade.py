@@ -172,8 +172,8 @@ def main():
                 print(f"  EXECUTED   : Bought {shares_to_buy} shares @ ${price:.2f}{stop_note}")
                 if telegram_configured():
                     send_message(
-                        f"✅ *Bought* `{ticker}` — {shares_to_buy} shares @ ${price:.2f}{stop_note}\n"
-                        f"Strategy: TRAILING_STOP ({confidence}%) | {politician_name}"
+                        f"✅ *Bought* `{ticker}` — {shares_to_buy} shares @ ${price:.2f}{escape_md(stop_note)}\n"
+                        f"Strategy: `TRAILING_STOP` ({confidence}%) | {politician_name}"
                     )
 
             elif strategy == "WHEEL":
