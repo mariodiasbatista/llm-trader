@@ -16,7 +16,7 @@ from datetime import datetime
 
 from core.alpaca import get_account, get_positions, market_buy, get_latest_price, trailing_stop_sell
 from core.logger import load_state, save_state, log_trade, log, state_lock
-from core.notifier import is_configured as telegram_configured, send_message, send_insufficient_funds_alert
+from core.notifier import is_configured as telegram_configured, send_message, send_insufficient_funds_alert, escape_md
 from strategies.smart_money import fetch_trades, fetch_large_trades
 from strategies.wheel import start_wheel
 from agents.claude_advisor import get_recommendation
@@ -194,7 +194,7 @@ def main():
         except Exception as e:
             log.error(f"[{ticker}] Execution failed: {e}")
             if telegram_configured():
-                send_message(f"❌ Execution failed for `{ticker}`: {e}")
+                send_message(f"❌ Execution failed for `{ticker}`: {escape_md(str(e))}")
         finally:
             # Always mark signal as processed — prevents infinite retry on failure.
             # Insufficient-funds signals are excluded (they use `continue` above).

@@ -82,6 +82,13 @@ def is_configured() -> bool:
     return bool(_token() and _chat_id())
 
 
+def escape_md(text: str) -> str:
+    """Escape Telegram Markdown v1 special characters in dynamic/user-generated text."""
+    for ch in ['_', '*', '`', '[']:
+        text = text.replace(ch, f'\\{ch}')
+    return text
+
+
 def _post(method: str, payload: dict) -> dict:
     if _telegram_log_level == 1:
         log.debug(f"[telegram] → {method} {payload}")
@@ -141,7 +148,7 @@ def send_trade_approval(trade_key: str, ticker: str, strategy: str,
         f"*Ticker:* `{ticker}` @ ${price:.2f}\n"
         f"*Politician:* {politician}\n"
         f"*Confidence:* {confidence}%\n"
-        f"*Reasoning:* {reasoning[:300]}"
+        f"*Reasoning:* {escape_md(reasoning[:300])}"
     )
     keyboard = {"inline_keyboard": [[
         {"text": "✅ Approve", "callback_data": f"approve:{trade_key}"},
@@ -248,7 +255,7 @@ def _handle_command(text: str) -> None:
         try:
             handler()
         except Exception as e:
-            send_message(f"Error running `{cmd[0]}`: {e}")
+            send_message(f"Error running `{cmd[0]}`: {escape_md(str(e))}")
 
     else:
         send_message(f"Unknown command: `{cmd[0]}`\nSend `/help` for available commands.")

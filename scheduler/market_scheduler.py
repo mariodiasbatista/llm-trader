@@ -14,7 +14,7 @@ import pytz
 import schedule
 
 from core.logger import log
-from core.notifier import tlog, get_log_level, load_log_level, LEVEL_LEGEND
+from core.notifier import tlog, get_log_level, load_log_level, LEVEL_LEGEND, escape_md
 
 BASE = Path(__file__).parent.parent
 
@@ -94,9 +94,9 @@ def _run_analyze():
         return
     if result.stdout:
         for line in result.stdout.strip().splitlines():
-            tlog(f"  {line}", 1)  # debug — full subprocess output
+            tlog(f"  {escape_md(line)}", 1)  # debug — full subprocess output
     if result.returncode != 0 and result.stderr:
-        tlog(f"analyze error: {result.stderr[:200]}", 3)
+        tlog(f"analyze error: {escape_md(result.stderr[:200])}", 3)
 
 
 def _poll_telegram():
@@ -178,7 +178,7 @@ def _poll_telegram():
 
             except Exception as e:
                 tlog(f"[{ticker}] Telegram-approved execution failed: {e}", 3)
-                send_message(f"❌ Execution failed for `{ticker}`: {e}")
+                send_message(f"❌ Execution failed for `{ticker}`: {escape_md(str(e))}")
 
         state["pending_trades"] = pending
         save_state(state)
