@@ -240,6 +240,56 @@ def _run_daily_summary():
     send_summary("\n".join(lines))
 
 
+def _build_schedule_message() -> str:
+    cfg = _settings()
+    trailing_min = cfg.get("trailing_stop_interval_min", 5)
+    wheel_min = cfg.get("wheel_interval_min", 15)
+    analyze_min = cfg.get("analyze_interval_min", 30)
+    summary_time = cfg.get("summary_time", "16:05")
+    market_open = cfg.get("market_open", "09:30")
+    market_close = cfg.get("market_close", "16:00")
+
+    now = datetime.now(NY_TZ)
+    now_t = now.time()
+
+    def _t(s: str):
+        return datetime.strptime(s, "%H:%M").time()
+
+    def _fmt(s: str) -> str:
+        return datetime.strptime(s, "%H:%M").strftime("%-I:%M %p")
+
+    open_t, close_t, summary_t = _t(market_open), _t(market_close), _t(summary_time)
+
+    def _status(start, end=None):
+        if end:
+            if now_t < start:   return "⬜"
+            if now_t <= end:    return "🔄"
+            return "✅"
+        return "✅" if now_t >= start else "⬜"
+
+    rows = [
+        (_status(open_t),              f"{_fmt(market_open)}",                      "Market Open"),
+        (_status(open_t, close_t),     f"{_fmt(market_open)}–{_fmt(market_close)}", f"Trailing Stop (every {trailing_min}m)"),
+        (_status(open_t, close_t),     f"{_fmt(market_open)}–{_fmt(market_close)}", f"Wheel Monitor (every {wheel_min}m)"),
+        (_status(open_t, close_t),     f"{_fmt(market_open)}–{_fmt(market_close)}", f"AI Analyze (every {analyze_min}m)"),
+        (_status(close_t),             f"{_fmt(market_close)}",                     "Market Close"),
+        (_status(summary_t),           f"{_fmt(summary_time)}",                     "Daily Summary"),
+    ]
+
+    day_str = now.strftime("%A %Y-%m-%d")
+    now_str = now.strftime("%-I:%M %p ET")
+    lines = [f"📅 *LLM Trader — {day_str}*\n"]
+    for icon, time_label, label in rows:
+        lines.append(f"{icon}  `{time_label:<18}` {label}")
+    lines.append(f"\n🕐 Now: {now_str}")
+    return "\n".join(lines)
+
+
+def _send_schedule() -> None:
+    from core.notifier import send_message
+    send_message(_build_schedule_message())
+
+
 def start():
     """Start the blocking scheduler. Ctrl+C to stop."""
     load_log_level()
@@ -267,6 +317,7 @@ def start():
 
     from core.notifier import is_configured, send_message, register_command
     register_command("/summary", "full portfolio snapshot with entry prices and stops", _run_daily_summary)
+    register_command("/schedule", "show today's trading schedule with live status", _send_schedule)
     telegram_status = "enabled" if is_configured() else "not configured"
     tlog(
         f"Scheduler started | trailing={trailing_min}min | "
