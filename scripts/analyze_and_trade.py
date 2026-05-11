@@ -135,6 +135,7 @@ def main():
         if strategy == "SKIP":
             log.info(f"[{ticker}] SKIP — {reasoning[:80]}")
             results.append(result)
+            processed_keys.append(trade_key)
             continue
 
         if args.dry_run:
