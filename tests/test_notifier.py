@@ -485,6 +485,17 @@ class TestHelpCommand:
 
     @patch("core.notifier.send_message")
     @patch("core.notifier.is_configured", return_value=True)
+    def test_help_commands_not_wrapped_in_backticks(self, mock_cfg, mock_send):
+        """Commands must not use backticks so Telegram renders them as tappable links."""
+        from core.notifier import _handle_command
+        _handle_command("/help")
+        text = mock_send.call_args[0][0]
+        assert "`/help`" not in text
+        assert "`/loglevel`" not in text
+        assert "`/setlevel`" not in text
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
     def test_help_includes_registered_commands(self, mock_cfg, mock_send):
         from core.notifier import register_command, _handle_command
         register_command("/status", "show bot status", lambda: None)

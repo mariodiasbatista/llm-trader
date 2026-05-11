@@ -8,9 +8,28 @@ Covers:
   3. Telegram skip callback → no trade executed
   4. Scheduler step messages forwarded to Telegram at the correct log level
 """
+import importlib.util
 import json
 import pytest
+from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import patch, MagicMock, call
+
+
+def _load_analyze_module():
+    """Load scripts/analyze_and_trade.py as a module so we can call main() in tests."""
+    spec = importlib.util.spec_from_file_location(
+        "_analyze_and_trade",
+        Path(__file__).parent.parent / "scripts" / "analyze_and_trade.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@contextmanager
+def _noop_lock():
+    yield
 
 # ── Shared test data ───────────────────────────────────────────────────────────
 
@@ -567,3 +586,59 @@ class TestAnalyzeSubprocessTimeout:
             f"Expected timeout error in Telegram messages, got: {sent}"
         )
         notifier._telegram_log_level = 2  # reset
+
+
+# ── 6. SKIP signals marked as processed ───────────────────────────────────────
+
+class TestSkipSignalMarkedAsProcessed:
+    """SKIP recommendations must land in copied_trades — prevents Claude re-analyzing same ticker."""
+
+    def _signal(self, ticker="ALH", date="2026-05-11", pol_id="P001"):
+        return {
+            "txDate": date, "txType": "purchase",
+            "size": "$15,001 - $50,000",
+            "asset": {"ticker": ticker},
+            "politician": {"name": "Michael McCaul", "id": pol_id},
+        }
+
+    def _skip_rec(self, reason="Not a liquid ticker."):
+        return {
+            "strategy": "SKIP", "confidence": 0, "reasoning": reason,
+            "suggested_position_size_pct": 0.0, "key_risk": "",
+            "_cache_hit": False, "_tokens_saved": 0,
+        }
+
+    def _run_main(self, signals, rec, initial_copied=None):
+        mod = _load_analyze_module()
+        acct = MagicMock()
+        acct.buying_power = 50_000.0
+        state = {
+            "positions": {}, "wheel": {},
+            "copied_trades": initial_copied or [],
+            "pending_trades": {},
+        }
+        with patch.object(mod, "get_account", return_value=acct), \
+             patch.object(mod, "get_positions", return_value=[]), \
+             patch.object(mod, "get_latest_price", return_value=19.0), \
+             patch.object(mod, "fetch_large_trades", return_value=signals), \
+             patch.object(mod, "get_recommendation", return_value=rec) as mock_rec, \
+             patch.object(mod, "load_state", return_value=state), \
+             patch.object(mod, "save_state") as mock_save, \
+             patch.object(mod, "state_lock", _noop_lock), \
+             patch("sys.argv", ["analyze_and_trade.py"]):
+            mod.main()
+        return mock_save, mock_rec
+
+    def test_skip_trade_key_saved_to_copied_trades(self):
+        """After SKIP, the trade_key must appear in saved copied_trades."""
+        mock_save, _ = self._run_main([self._signal()], self._skip_rec())
+        saved = mock_save.call_args[0][0]
+        assert "2026-05-11_ALH_P001" in saved["copied_trades"]
+
+    def test_already_processed_skip_does_not_call_claude(self):
+        """If a SKIP trade_key is already in copied_trades, Claude is never called again."""
+        _, mock_rec = self._run_main(
+            [self._signal()], self._skip_rec(),
+            initial_copied=["2026-05-11_ALH_P001"],
+        )
+        mock_rec.assert_not_called()
