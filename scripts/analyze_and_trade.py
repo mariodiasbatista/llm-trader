@@ -204,11 +204,18 @@ def main():
         results.append(result)
 
     with state_lock():
+        from datetime import timedelta
+        cutoff = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
         fresh = load_state()
         existing = set(fresh.get("copied_trades", []))
         for key in processed_keys:
             if key not in existing:
                 fresh.setdefault("copied_trades", []).append(key)
+        # Prune entries older than 30 days — signals age out of the 7-day fetch
+        # window naturally, so stale keys beyond that are just dead weight.
+        fresh["copied_trades"] = [
+            k for k in fresh["copied_trades"] if k[:10] >= cutoff
+        ]
         save_state(fresh)
 
     # Print run summary
