@@ -179,6 +179,10 @@ def main():
 
             elif strategy == "WHEEL":
                 wheel_result = start_wheel(ticker, contracts=1)
+                if not wheel_result.get("put_strike"):
+                    log.warning(f"[{ticker}] WHEEL skipped — no liquid put available")
+                    results.append(result)
+                    continue  # finally still runs → marks as processed; no Telegram error
                 log_trade(
                     "AI_START_WHEEL", ticker, 1, price,
                     f"strategy=WHEEL confidence={confidence}% "
