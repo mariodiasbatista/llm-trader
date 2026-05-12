@@ -71,7 +71,20 @@ def main():
     existing_tickers = [p.symbol for p in open_positions]
     position_value = {p.symbol: float(p.qty) * float(p.current_price) for p in open_positions}
     state = load_state()
-    processed_keys = []
+
+    def _mark_processed(key: str):
+        """Persist a single trade_key to copied_trades immediately — survives mid-run crashes."""
+        with state_lock():
+            from datetime import timedelta
+            cutoff = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+            fresh = load_state()
+            if key not in fresh.get("copied_trades", []):
+                fresh.setdefault("copied_trades", []).append(key)
+            fresh["copied_trades"] = [
+                k for k in fresh["copied_trades"] if k[:10] >= cutoff
+            ]
+            save_state(fresh)
+
     results = []
     tokens_saved_total = 0
 
@@ -98,11 +111,11 @@ def main():
         if ticker in existing_tickers:
             if not size_up:
                 log.info(f"[{ticker}] Already in portfolio — size_up=false, skipping (diversification)")
-                processed_keys.append(trade_key)
+                _mark_processed(trade_key)
                 continue
             if max_position_usd is not None and position_value.get(ticker, 0) >= max_position_usd:
                 log.info(f"[{ticker}] Position cap reached (${position_value[ticker]:,.0f} ≥ ${max_position_usd:,.0f}) — skipping")
-                processed_keys.append(trade_key)
+                _mark_processed(trade_key)
                 continue
 
         try:
@@ -154,7 +167,7 @@ def main():
         if strategy == "SKIP":
             log.info(f"[{ticker}] SKIP — {reasoning[:80]}")
             results.append(result)
-            processed_keys.append(trade_key)
+            _mark_processed(trade_key)
             continue
 
         if args.dry_run:
@@ -222,24 +235,9 @@ def main():
         finally:
             # Always mark signal as processed — prevents infinite retry on failure.
             # Insufficient-funds signals are excluded (they use `continue` above).
-            processed_keys.append(trade_key)
+            _mark_processed(trade_key)
 
         results.append(result)
-
-    with state_lock():
-        from datetime import timedelta
-        cutoff = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-        fresh = load_state()
-        existing = set(fresh.get("copied_trades", []))
-        for key in processed_keys:
-            if key not in existing:
-                fresh.setdefault("copied_trades", []).append(key)
-        # Prune entries older than 30 days — signals age out of the 7-day fetch
-        # window naturally, so stale keys beyond that are just dead weight.
-        fresh["copied_trades"] = [
-            k for k in fresh["copied_trades"] if k[:10] >= cutoff
-        ]
-        save_state(fresh)
 
     # Print run summary
     executed = [r for r in results if r.get("executed")]

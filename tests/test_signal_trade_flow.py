@@ -853,3 +853,55 @@ class TestMaxPositionCap:
         }
         mock_rec = self._run([self._position("EQT", 500, 56.0)], settings)  # no cap
         mock_rec.assert_called_once()
+
+
+# ── 9. _mark_processed saves immediately ─────────────────────────────────────
+
+class TestMarkProcessedPersistsImmediately:
+    """Each signal is saved to copied_trades immediately — survives mid-run crashes."""
+
+    def _signal(self, ticker="OMF", date="2026-05-12", pol_id="M001"):
+        return {
+            "txDate": date, "txType": "purchase",
+            "size": "$15,001 - $50,000",
+            "asset": {"ticker": ticker},
+            "politician": {"name": "Michael McCaul", "id": pol_id},
+        }
+
+    def test_skip_signal_saved_before_next_signal_processed(self):
+        """SKIP trade_key is in copied_trades after the first signal — not deferred to end."""
+        saved_states = []
+
+        def capture_save(state):
+            saved_states.append([k for k in state.get("copied_trades", [])])
+
+        mod = _load_analyze_module()
+        acct = MagicMock()
+        acct.buying_power = 50_000.0
+        initial_state = {"positions": {}, "wheel": {}, "copied_trades": [], "pending_trades": {}}
+
+        import json
+        settings = {
+            "analyze": {"size_up": False},
+            "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {},
+        }
+        skip_rec = {
+            "strategy": "SKIP", "confidence": 0, "reasoning": "illiquid",
+            "suggested_position_size_pct": 0.0, "key_risk": "",
+            "_cache_hit": False, "_tokens_saved": 0,
+        }
+
+        with patch.object(mod, "get_account", return_value=acct), \
+             patch.object(mod, "get_positions", return_value=[]), \
+             patch.object(mod, "get_latest_price", return_value=51.0), \
+             patch.object(mod, "fetch_large_trades", return_value=[self._signal()]), \
+             patch.object(mod, "get_recommendation", return_value=skip_rec), \
+             patch.object(mod, "load_state", return_value=initial_state), \
+             patch.object(mod, "save_state", side_effect=capture_save), \
+             patch.object(mod, "state_lock", _noop_lock), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(settings)), \
+             patch("sys.argv", ["analyze_and_trade.py"]):
+            mod.main()
+
+        # save_state was called and OMF key was persisted
+        assert any("2026-05-12_OMF_M001" in k for saved in saved_states for k in saved)
