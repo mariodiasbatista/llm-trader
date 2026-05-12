@@ -67,7 +67,9 @@ def main():
 
     acct = get_account()
     buying_power = float(acct.buying_power)
-    existing_tickers = [p.symbol for p in get_positions()]
+    open_positions = get_positions()
+    existing_tickers = [p.symbol for p in open_positions]
+    position_value = {p.symbol: float(p.qty) * float(p.current_price) for p in open_positions}
     state = load_state()
     processed_keys = []
     results = []
@@ -75,7 +77,9 @@ def main():
 
     import json as _json
     _cfg_path = Path(__file__).parent.parent / "config" / "settings.json"
-    size_up = _json.loads(_cfg_path.read_text()).get("analyze", {}).get("size_up", False)
+    _analyze_cfg = _json.loads(_cfg_path.read_text()).get("analyze", {})
+    size_up = _analyze_cfg.get("size_up", False)
+    max_position_usd = _analyze_cfg.get("max_position_usd", None)
 
     for trade in buy_signals:
         ticker = trade.get("asset", {}).get("ticker", "")
@@ -90,11 +94,16 @@ def main():
             log.info(f"[{ticker}] Already processed — skipping")
             continue
 
-        # Diversification guard: skip if already holding this ticker and size_up is off
-        if not size_up and ticker in existing_tickers:
-            log.info(f"[{ticker}] Already in portfolio — size_up=false, skipping (diversification)")
-            processed_keys.append(trade_key)
-            continue
+        # Position size guard
+        if ticker in existing_tickers:
+            if not size_up:
+                log.info(f"[{ticker}] Already in portfolio — size_up=false, skipping (diversification)")
+                processed_keys.append(trade_key)
+                continue
+            if max_position_usd is not None and position_value.get(ticker, 0) >= max_position_usd:
+                log.info(f"[{ticker}] Position cap reached (${position_value[ticker]:,.0f} ≥ ${max_position_usd:,.0f}) — skipping")
+                processed_keys.append(trade_key)
+                continue
 
         try:
             price = get_latest_price(ticker)

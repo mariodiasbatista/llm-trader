@@ -35,7 +35,8 @@
     "days_lookback": 7
   },
   "analyze": {
-    "size_up": false
+    "size_up": true,
+    "max_position_usd": 10000
   },
   "telegram_log_level": 1,
   "schedule": {

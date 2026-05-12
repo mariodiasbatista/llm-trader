@@ -781,3 +781,75 @@ class TestSizeUpFlag:
             mod.main()
 
         mock_rec.assert_called_once()
+
+
+# ── 8. max_position_usd cap ───────────────────────────────────────────────────
+
+class TestMaxPositionCap:
+    """With size_up=true, max_position_usd prevents compounding beyond a dollar cap."""
+
+    def _signal(self, ticker="EQT"):
+        return {
+            "txDate": "2026-05-12", "txType": "purchase",
+            "size": "$15,001 - $50,000",
+            "asset": {"ticker": ticker},
+            "politician": {"name": "Michael McCaul", "id": "M001"},
+        }
+
+    def _position(self, symbol, qty, price):
+        pos = MagicMock()
+        pos.symbol = symbol
+        pos.qty = str(qty)
+        pos.current_price = str(price)
+        return pos
+
+    def _run(self, positions, settings):
+        mod = _load_analyze_module()
+        acct = MagicMock()
+        acct.buying_power = 50_000.0
+        state = {"positions": {}, "wheel": {}, "copied_trades": [], "pending_trades": {}}
+        skip_rec = {
+            "strategy": "SKIP", "confidence": 0, "reasoning": "test",
+            "suggested_position_size_pct": 0.0, "key_risk": "",
+            "_cache_hit": False, "_tokens_saved": 0,
+        }
+        import json
+        with patch.object(mod, "get_account", return_value=acct), \
+             patch.object(mod, "get_positions", return_value=positions), \
+             patch.object(mod, "get_latest_price", return_value=56.0), \
+             patch.object(mod, "fetch_large_trades", return_value=[self._signal()]), \
+             patch.object(mod, "get_recommendation", return_value=skip_rec) as mock_rec, \
+             patch.object(mod, "load_state", return_value=state), \
+             patch.object(mod, "save_state"), \
+             patch.object(mod, "state_lock", _noop_lock), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(settings)), \
+             patch("sys.argv", ["analyze_and_trade.py"]):
+            mod.main()
+        return mock_rec
+
+    def test_cap_blocks_claude_when_position_exceeds_limit(self):
+        """If position value >= max_position_usd, Claude is never called."""
+        settings = {
+            "analyze": {"size_up": True, "max_position_usd": 10000},
+            "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {},
+        }
+        mock_rec = self._run([self._position("EQT", 200, 56.0)], settings)  # 200×56=$11,200 > $10K
+        mock_rec.assert_not_called()
+
+    def test_cap_allows_claude_when_position_below_limit(self):
+        """If position value < max_position_usd, signal reaches Claude normally."""
+        settings = {
+            "analyze": {"size_up": True, "max_position_usd": 10000},
+            "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {},
+        }
+        mock_rec = self._run([self._position("EQT", 100, 56.0)], settings)  # 100×56=$5,600 < $10K
+        mock_rec.assert_called_once()
+
+    def test_no_cap_allows_unlimited_size_up(self):
+        """When max_position_usd is absent, size_up has no ceiling."""
+        settings = {
+            "analyze": {"size_up": True},
+            "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {},
+        }
+        mock_rec = self._run([self._position("EQT", 500, 56.0)], settings)  # no cap
+        mock_rec.assert_called_once()
