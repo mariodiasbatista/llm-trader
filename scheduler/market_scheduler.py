@@ -97,7 +97,7 @@ def _run_analyze():
             if line.strip():
                 tlog(f"  {line}", 1)  # debug — full subprocess output
     if result.returncode != 0 and result.stderr:
-        tlog(f"analyze error: {escape_md(result.stderr[:200])}", 3)
+        tlog(f"analyze error: {escape_md(result.stderr[:800])}", 3)
 
 
 def _poll_telegram():
