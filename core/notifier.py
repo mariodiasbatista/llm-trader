@@ -8,9 +8,11 @@ from core.logger import log
 
 CREDS_FILE = Path(__file__).parent.parent / "credentials.json"
 _TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
+_OFFSET_FILE = Path(__file__).parent.parent / "logs" / "telegram_offset.txt"
 
 # Tracks the last processed Telegram update ID to avoid replaying callbacks
 _LAST_UPDATE_ID = 0
+_offset_loaded = False  # loaded from disk on first poll_approvals call
 
 # 0=off  1=debug (all, incl. API calls)  2=info/default  3=error only
 _telegram_log_level: int = 2
@@ -268,9 +270,16 @@ def poll_approvals() -> list[dict]:
     Returns list of approval dicts: [{"action": "approve"|"skip", "trade_key": "..."}]
     Text commands (/loglevel, /setlevel N) are handled as side-effects.
     """
-    global _LAST_UPDATE_ID
+    global _LAST_UPDATE_ID, _offset_loaded
     if not is_configured():
         return []
+
+    if not _offset_loaded:
+        try:
+            _LAST_UPDATE_ID = int(_OFFSET_FILE.read_text().strip())
+        except Exception:
+            pass
+        _offset_loaded = True
 
     resp = _post("getUpdates", {
         "offset": _LAST_UPDATE_ID + 1,
@@ -279,6 +288,7 @@ def poll_approvals() -> list[dict]:
     })
 
     results = []
+    prev_id = _LAST_UPDATE_ID
     for update in resp.get("result", []):
         _LAST_UPDATE_ID = max(_LAST_UPDATE_ID, update["update_id"])
 
@@ -312,5 +322,11 @@ def poll_approvals() -> list[dict]:
                 "reply_markup": json.dumps({"inline_keyboard": []}),
             })
             send_message(f"{label} `{trade_key.split('_')[1] if '_' in trade_key else trade_key}`")
+
+    if _LAST_UPDATE_ID != prev_id:
+        try:
+            _OFFSET_FILE.write_text(str(_LAST_UPDATE_ID))
+        except Exception:
+            pass
 
     return results

@@ -855,3 +855,43 @@ class TestPollApprovalsEdgeCases:
         from core.notifier import poll_approvals
         results = poll_approvals()
         assert results == []
+
+    @patch("core.notifier._post")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_offset_persisted_to_file_after_update(self, mock_cfg, mock_post):
+        """After receiving updates, _LAST_UPDATE_ID is written to _OFFSET_FILE."""
+        import core.notifier as notifier
+        notifier._LAST_UPDATE_ID = 0
+        mock_post.side_effect = [
+            {"result": [{"update_id": 99, "message": {"text": "/help"}}]},
+            {},  # sendMessage response for /help reply
+        ]
+        from core.notifier import poll_approvals
+        poll_approvals()
+        assert notifier._OFFSET_FILE.read_text().strip() == "99"
+
+    @patch("core.notifier._post")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_offset_loaded_from_file_on_first_call(self, mock_cfg, mock_post):
+        """On the first poll after restart, _LAST_UPDATE_ID is restored from the persisted file."""
+        import core.notifier as notifier
+        notifier._OFFSET_FILE.write_text("77")
+        notifier._offset_loaded = False
+        notifier._LAST_UPDATE_ID = 0
+        mock_post.return_value = {"result": []}
+        from core.notifier import poll_approvals
+        poll_approvals()
+        assert notifier._LAST_UPDATE_ID == 77
+
+    @patch("core.notifier._post")
+    @patch("core.notifier.is_configured", return_value=True)
+    def test_offset_write_failure_does_not_raise(self, mock_cfg, mock_post):
+        """If the offset file can't be written, poll_approvals must not raise."""
+        import core.notifier as notifier
+        notifier._LAST_UPDATE_ID = 0
+        mock_post.side_effect = [
+            {"result": [{"update_id": 5, "message": {"text": "hello"}}]},
+        ]
+        notifier._OFFSET_FILE = notifier._OFFSET_FILE.parent / "\0invalid"
+        from core.notifier import poll_approvals
+        poll_approvals()  # must not raise despite bad path

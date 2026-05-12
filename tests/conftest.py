@@ -18,6 +18,22 @@ def _isolate_settings_file(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_telegram_offset(tmp_path):
+    """Every test uses a private temp offset file — real logs/telegram_offset.txt never touched."""
+    import core.notifier as notifier
+    original_file = notifier._OFFSET_FILE
+    original_loaded = notifier._offset_loaded
+    original_id = notifier._LAST_UPDATE_ID
+    notifier._OFFSET_FILE = tmp_path / "telegram_offset.txt"
+    notifier._offset_loaded = False
+    notifier._LAST_UPDATE_ID = 0
+    yield
+    notifier._OFFSET_FILE = original_file
+    notifier._offset_loaded = original_loaded
+    notifier._LAST_UPDATE_ID = original_id
+
+
+@pytest.fixture(autouse=True)
 def _isolate_trade_log(tmp_path):
     """Every test writes trades to a private temp file — real logs/trades.log is never touched."""
     import core.logger as logger_mod
