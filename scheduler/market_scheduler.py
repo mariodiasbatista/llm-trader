@@ -315,7 +315,7 @@ def _build_schedule_message() -> str:
     now_str = now.strftime("%-I:%M %p ET")
     lines = [f"📅 *LLM Trader — {day_str}*\n"]
     for icon, time_label, label in rows:
-        lines.append(f"{icon}  `{time_label:<18}` {label}")
+        lines.append(f"{icon}  `{time_label}`  {label}")
     lines.append(f"\n🕐 Now: {now_str}")
     return "\n".join(lines)
 
