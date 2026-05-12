@@ -325,8 +325,26 @@ def _send_schedule() -> None:
     send_message(_build_schedule_message())
 
 
+_PID_FILE = BASE / "logs" / "scheduler.pid"
+
+
+def _enforce_single_instance():
+    """Kill any previous scheduler instance and write current PID to disk."""
+    import os, signal
+    if _PID_FILE.exists():
+        try:
+            old_pid = int(_PID_FILE.read_text().strip())
+            if old_pid != os.getpid():
+                os.kill(old_pid, signal.SIGTERM)
+                log.info(f"Terminated previous scheduler instance (PID {old_pid})")
+        except (ProcessLookupError, ValueError):
+            pass  # process already gone
+    _PID_FILE.write_text(str(os.getpid()))
+
+
 def start():
     """Start the blocking scheduler. Ctrl+C to stop."""
+    _enforce_single_instance()
     load_log_level()
     cfg = _settings()
 
