@@ -185,6 +185,30 @@ def _poll_telegram():
         save_state(state)
 
 
+def _todays_activity() -> dict:
+    """Return today's buy and sell tickers read from trades.log."""
+    from core.logger import TRADE_LOG
+    today = datetime.now(NY_TZ).strftime("%Y-%m-%d")
+    buys, sells = [], []
+    if not TRADE_LOG.exists():
+        return {"buys": buys, "sells": sells}
+    with open(TRADE_LOG) as f:
+        for line in f:
+            try:
+                entry = json.loads(line.strip())
+            except Exception:
+                continue
+            if not entry.get("ts", "").startswith(today):
+                continue
+            action = entry.get("action", "")
+            symbol = entry.get("symbol", "")
+            if action in ("AI_BUY_TRAILING", "AI_START_WHEEL", "LADDER_BUY"):
+                buys.append(symbol)
+            elif action in ("STOP_SELL", "TAKE_PROFIT"):
+                sells.append(symbol)
+    return {"buys": buys, "sells": sells}
+
+
 def _run_daily_summary():
     from core.alpaca import get_account, get_positions
     from core.logger import load_state
@@ -237,6 +261,16 @@ def _run_daily_summary():
             )
     else:
         lines.append("\n_No open positions._")
+
+    activity = _todays_activity()
+    buys_str  = ", ".join(f"`{s}`" for s in activity["buys"])  or "none"
+    sells_str = ", ".join(f"`{s}`" for s in activity["sells"]) or "none"
+    lines.append(
+        f"\n📋 *Today's Activity*\n"
+        f"Positions open:  {len(positions)}\n"
+        f"Buys today:      {len(activity['buys'])} — {buys_str}\n"
+        f"Sells today:     {len(activity['sells'])} — {sells_str}"
+    )
 
     send_summary("\n".join(lines))
 

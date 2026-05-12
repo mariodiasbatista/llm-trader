@@ -614,3 +614,119 @@ class TestStart:
             start()
         sent = [c[0][0] for c in mock_send.call_args_list]
         assert any("LLM Trader started" in t for t in sent)
+
+
+# ── _todays_activity ──────────────────────────────────────────────────────────
+
+class TestTodaysActivity:
+    def _write_trades(self, tmp_path, entries):
+        import json
+        trade_log = tmp_path / "trades.log"
+        with open(trade_log, "w") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+        return trade_log
+
+    def test_counts_todays_buys(self, tmp_path):
+        import core.logger as logger_mod
+        today = real_dt.now(_NY).strftime("%Y-%m-%d")
+        log = self._write_trades(tmp_path, [
+            {"ts": f"{today}T10:00:00", "action": "AI_BUY_TRAILING", "symbol": "GE"},
+            {"ts": f"{today}T10:30:00", "action": "AI_BUY_TRAILING", "symbol": "MSFT"},
+        ])
+        original = logger_mod.TRADE_LOG
+        logger_mod.TRADE_LOG = log
+        try:
+            from scheduler.market_scheduler import _todays_activity
+            result = _todays_activity()
+            assert result["buys"] == ["GE", "MSFT"]
+            assert result["sells"] == []
+        finally:
+            logger_mod.TRADE_LOG = original
+
+    def test_counts_todays_sells(self, tmp_path):
+        import core.logger as logger_mod
+        today = real_dt.now(_NY).strftime("%Y-%m-%d")
+        log = self._write_trades(tmp_path, [
+            {"ts": f"{today}T14:00:00", "action": "STOP_SELL", "symbol": "TDG"},
+            {"ts": f"{today}T15:00:00", "action": "TAKE_PROFIT", "symbol": "PEP"},
+        ])
+        original = logger_mod.TRADE_LOG
+        logger_mod.TRADE_LOG = log
+        try:
+            from scheduler.market_scheduler import _todays_activity
+            result = _todays_activity()
+            assert result["sells"] == ["TDG", "PEP"]
+            assert result["buys"] == []
+        finally:
+            logger_mod.TRADE_LOG = original
+
+    def test_excludes_previous_days(self, tmp_path):
+        import core.logger as logger_mod
+        log = self._write_trades(tmp_path, [
+            {"ts": "2026-01-01T10:00:00", "action": "AI_BUY_TRAILING", "symbol": "OLD"},
+        ])
+        original = logger_mod.TRADE_LOG
+        logger_mod.TRADE_LOG = log
+        try:
+            from scheduler.market_scheduler import _todays_activity
+            result = _todays_activity()
+            assert result["buys"] == []
+        finally:
+            logger_mod.TRADE_LOG = original
+
+    def test_returns_empty_when_no_log_file(self, tmp_path):
+        import core.logger as logger_mod
+        original = logger_mod.TRADE_LOG
+        logger_mod.TRADE_LOG = tmp_path / "nonexistent.log"
+        try:
+            from scheduler.market_scheduler import _todays_activity
+            result = _todays_activity()
+            assert result == {"buys": [], "sells": []}
+        finally:
+            logger_mod.TRADE_LOG = original
+
+    def test_skips_malformed_lines(self, tmp_path):
+        import core.logger as logger_mod
+        today = real_dt.now(_NY).strftime("%Y-%m-%d")
+        log = self._write_trades(tmp_path, [
+            {"ts": f"{today}T10:00:00", "action": "AI_BUY_TRAILING", "symbol": "GE"},
+        ])
+        log.write_text("not valid json\n" + log.read_text())
+        original = logger_mod.TRADE_LOG
+        logger_mod.TRADE_LOG = log
+        try:
+            from scheduler.market_scheduler import _todays_activity
+            result = _todays_activity()
+            assert result["buys"] == ["GE"]  # valid line still parsed
+        finally:
+            logger_mod.TRADE_LOG = original
+
+    def test_summary_includes_activity_indicators(self, tmp_path):
+        """_run_daily_summary sends position count, buys, and sells to Telegram."""
+        import core.logger as logger_mod
+        import core.notifier as notifier
+        notifier._telegram_log_level = 2
+        today = real_dt.now(_NY).strftime("%Y-%m-%d")
+        log = self._write_trades(tmp_path, [
+            {"ts": f"{today}T10:00:00", "action": "AI_BUY_TRAILING", "symbol": "GE"},
+            {"ts": f"{today}T14:00:00", "action": "STOP_SELL",       "symbol": "TDG"},
+        ])
+        original_log = logger_mod.TRADE_LOG
+        logger_mod.TRADE_LOG = log
+        try:
+            with patch("core.alpaca.get_account", return_value=_mock_account()), \
+                 patch("core.alpaca.get_positions", return_value=[]), \
+                 patch("core.logger.load_state", return_value={"positions": {}, "wheel": {}, "copied_trades": []}), \
+                 patch("core.notifier.send_message") as mock_send:
+                from scheduler.market_scheduler import _run_daily_summary
+                _run_daily_summary()
+            text = mock_send.call_args[0][0]
+            assert "Positions open" in text
+            assert "Buys today" in text
+            assert "GE" in text
+            assert "Sells today" in text
+            assert "TDG" in text
+        finally:
+            logger_mod.TRADE_LOG = original_log
+            notifier._telegram_log_level = 2
