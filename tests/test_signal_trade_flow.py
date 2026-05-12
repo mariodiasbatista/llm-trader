@@ -642,3 +642,142 @@ class TestSkipSignalMarkedAsProcessed:
             initial_copied=["2026-05-11_ALH_P001"],
         )
         mock_rec.assert_not_called()
+
+
+# ── 7. size_up flag — diversification guard ───────────────────────────────────
+
+class TestSizeUpFlag:
+    """When size_up=false, the bot must not buy more of a ticker already in the portfolio."""
+
+    def _signal(self, ticker="EQT", date="2026-05-12", pol_id="M001"):
+        return {
+            "txDate": date, "txType": "purchase",
+            "size": "$15,001 - $50,000",
+            "asset": {"ticker": ticker},
+            "politician": {"name": "Michael McCaul", "id": pol_id},
+        }
+
+    def _existing_position(self, symbol="EQT"):
+        pos = MagicMock()
+        pos.symbol = symbol
+        return pos
+
+    def _run(self, existing_positions, size_up, signal=None):
+        mod = _load_analyze_module()
+        acct = MagicMock()
+        acct.buying_power = 50_000.0
+        state = {"positions": {}, "wheel": {}, "copied_trades": [], "pending_trades": {}}
+
+        # Write a temp settings.json with the desired size_up value
+        import json, tempfile
+        from pathlib import Path
+        settings = {"analyze": {"size_up": size_up}, "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {}}
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        json.dump(settings, tmp)
+        tmp.flush()
+
+        with patch.object(mod, "get_account", return_value=acct), \
+             patch.object(mod, "get_positions", return_value=existing_positions), \
+             patch.object(mod, "get_latest_price", return_value=56.0), \
+             patch.object(mod, "fetch_large_trades", return_value=[signal or self._signal()]), \
+             patch.object(mod, "get_recommendation") as mock_rec, \
+             patch.object(mod, "load_state", return_value=state), \
+             patch.object(mod, "save_state"), \
+             patch.object(mod, "state_lock", _noop_lock), \
+             patch.object(mod, "_cfg_path" if hasattr(mod, "_cfg_path") else "_json",
+                          new=MagicMock()) if False else patch(
+                 "builtins.open", MagicMock()) if False else \
+             patch("pathlib.Path.read_text", return_value=json.dumps(settings)), \
+             patch("sys.argv", ["analyze_and_trade.py"]):
+            mod.main()
+        return mock_rec
+
+    def test_size_up_false_skips_existing_ticker(self):
+        """With size_up=false, a signal for an already-owned ticker never reaches Claude."""
+        mod = _load_analyze_module()
+        acct = MagicMock()
+        acct.buying_power = 50_000.0
+        state = {"positions": {}, "wheel": {}, "copied_trades": [], "pending_trades": {}}
+
+        import json
+        settings = {
+            "analyze": {"size_up": False},
+            "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {},
+        }
+
+        with patch.object(mod, "get_account", return_value=acct), \
+             patch.object(mod, "get_positions", return_value=[self._existing_position("EQT")]), \
+             patch.object(mod, "fetch_large_trades", return_value=[self._signal("EQT")]), \
+             patch.object(mod, "get_recommendation") as mock_rec, \
+             patch.object(mod, "load_state", return_value=state), \
+             patch.object(mod, "save_state"), \
+             patch.object(mod, "state_lock", _noop_lock), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(settings)), \
+             patch("sys.argv", ["analyze_and_trade.py"]):
+            mod.main()
+
+        mock_rec.assert_not_called()
+
+    def test_size_up_true_allows_adding_to_existing_position(self):
+        """With size_up=true, a signal for an already-owned ticker IS sent to Claude."""
+        mod = _load_analyze_module()
+        acct = MagicMock()
+        acct.buying_power = 50_000.0
+        state = {"positions": {}, "wheel": {}, "copied_trades": [], "pending_trades": {}}
+
+        import json
+        settings = {
+            "analyze": {"size_up": True},
+            "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {},
+        }
+        skip_rec = {
+            "strategy": "SKIP", "confidence": 0, "reasoning": "test",
+            "suggested_position_size_pct": 0.0, "key_risk": "",
+            "_cache_hit": False, "_tokens_saved": 0,
+        }
+
+        with patch.object(mod, "get_account", return_value=acct), \
+             patch.object(mod, "get_positions", return_value=[self._existing_position("EQT")]), \
+             patch.object(mod, "get_latest_price", return_value=56.0), \
+             patch.object(mod, "fetch_large_trades", return_value=[self._signal("EQT")]), \
+             patch.object(mod, "get_recommendation", return_value=skip_rec) as mock_rec, \
+             patch.object(mod, "load_state", return_value=state), \
+             patch.object(mod, "save_state"), \
+             patch.object(mod, "state_lock", _noop_lock), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(settings)), \
+             patch("sys.argv", ["analyze_and_trade.py"]):
+            mod.main()
+
+        mock_rec.assert_called_once()
+
+    def test_size_up_false_does_not_affect_new_tickers(self):
+        """With size_up=false, signals for tickers NOT in the portfolio reach Claude normally."""
+        mod = _load_analyze_module()
+        acct = MagicMock()
+        acct.buying_power = 50_000.0
+        state = {"positions": {}, "wheel": {}, "copied_trades": [], "pending_trades": {}}
+
+        import json
+        settings = {
+            "analyze": {"size_up": False},
+            "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {},
+        }
+        skip_rec = {
+            "strategy": "SKIP", "confidence": 0, "reasoning": "test",
+            "suggested_position_size_pct": 0.0, "key_risk": "",
+            "_cache_hit": False, "_tokens_saved": 0,
+        }
+
+        with patch.object(mod, "get_account", return_value=acct), \
+             patch.object(mod, "get_positions", return_value=[self._existing_position("GE")]), \
+             patch.object(mod, "get_latest_price", return_value=56.0), \
+             patch.object(mod, "fetch_large_trades", return_value=[self._signal("EQT")]), \
+             patch.object(mod, "get_recommendation", return_value=skip_rec) as mock_rec, \
+             patch.object(mod, "load_state", return_value=state), \
+             patch.object(mod, "save_state"), \
+             patch.object(mod, "state_lock", _noop_lock), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(settings)), \
+             patch("sys.argv", ["analyze_and_trade.py"]):
+            mod.main()
+
+        mock_rec.assert_called_once()

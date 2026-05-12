@@ -73,6 +73,10 @@ def main():
     results = []
     tokens_saved_total = 0
 
+    import json as _json
+    _cfg_path = Path(__file__).parent.parent / "config" / "settings.json"
+    size_up = _json.loads(_cfg_path.read_text()).get("analyze", {}).get("size_up", False)
+
     for trade in buy_signals:
         ticker = trade.get("asset", {}).get("ticker", "")
         if not ticker or not ticker.replace(".", "").isalpha():
@@ -84,6 +88,12 @@ def main():
         )
         if trade_key in state.get("copied_trades", []):
             log.info(f"[{ticker}] Already processed — skipping")
+            continue
+
+        # Diversification guard: skip if already holding this ticker and size_up is off
+        if not size_up and ticker in existing_tickers:
+            log.info(f"[{ticker}] Already in portfolio — size_up=false, skipping (diversification)")
+            processed_keys.append(trade_key)
             continue
 
         try:
