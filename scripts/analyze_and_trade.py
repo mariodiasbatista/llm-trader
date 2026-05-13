@@ -76,7 +76,7 @@ def main():
         """Persist a single trade_key to copied_trades immediately — survives mid-run crashes."""
         with state_lock():
             from datetime import timedelta
-            cutoff = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+            cutoff = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
             fresh = load_state()
             if key not in fresh.get("copied_trades", []):
                 fresh.setdefault("copied_trades", []).append(key)
@@ -105,6 +105,13 @@ def main():
         )
         if trade_key in state.get("copied_trades", []):
             log.info(f"[{ticker}] Already processed — skipping")
+            continue
+
+        # Drop signals whose txDate is older than the configured lookback window.
+        # The web scraper sometimes returns stale disclosures outside the intended range.
+        if _days_since(trade.get("txDate", "")) > args.days:
+            log.info(f"[{ticker}] Signal too old ({trade.get('txDate')}) — skipping")
+            _mark_processed(trade_key)
             continue
 
         # Position size guard
