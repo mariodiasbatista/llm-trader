@@ -186,27 +186,53 @@ def _poll_telegram():
 
 
 def _todays_activity() -> dict:
-    """Return today's buy and sell tickers read from trades.log."""
+    """Return today's buy/sell tickers and realized P&L from sells."""
     from core.logger import TRADE_LOG
     today = datetime.now(NY_TZ).strftime("%Y-%m-%d")
     buys, sells = [], []
+    realized_pnl = 0.0
+
     if not TRADE_LOG.exists():
-        return {"buys": buys, "sells": sells}
+        return {"buys": buys, "sells": sells, "realized_pnl": realized_pnl}
+
+    # Build a map of symbol → list of (qty, price) buys for entry-price lookup
+    all_entries: list = []
     with open(TRADE_LOG) as f:
         for line in f:
             try:
-                entry = json.loads(line.strip())
+                all_entries.append(json.loads(line.strip()))
             except Exception:
                 continue
-            if not entry.get("ts", "").startswith(today):
-                continue
-            action = entry.get("action", "")
-            symbol = entry.get("symbol", "")
-            if action in ("AI_BUY_TRAILING", "AI_START_WHEEL", "LADDER_BUY"):
-                buys.append(symbol)
-            elif action in ("STOP_SELL", "TAKE_PROFIT"):
-                sells.append(symbol)
-    return {"buys": buys, "sells": sells}
+
+    # Weighted avg entry price per symbol from all historical buys
+    buy_totals: dict = {}
+    for e in all_entries:
+        action = e.get("action", "")
+        if action in ("AI_BUY_TRAILING", "AI_START_WHEEL", "LADDER_BUY"):
+            sym = e.get("symbol", "")
+            qty = float(e.get("qty", 0))
+            price = float(e.get("price", 0))
+            if qty > 0 and price > 0:
+                prev_qty, prev_cost = buy_totals.get(sym, (0, 0))
+                buy_totals[sym] = (prev_qty + qty, prev_cost + qty * price)
+
+    for e in all_entries:
+        if not e.get("ts", "").startswith(today):
+            continue
+        action = e.get("action", "")
+        symbol = e.get("symbol", "")
+        if action in ("AI_BUY_TRAILING", "AI_START_WHEEL", "LADDER_BUY"):
+            buys.append(symbol)
+        elif action in ("STOP_SELL", "TAKE_PROFIT"):
+            sells.append(symbol)
+            qty = float(e.get("qty", 0))
+            sell_price = float(e.get("price", 0))
+            total_qty, total_cost = buy_totals.get(symbol, (0, 0))
+            if total_qty > 0:
+                avg_entry = total_cost / total_qty
+                realized_pnl += (sell_price - avg_entry) * qty
+
+    return {"buys": buys, "sells": sells, "realized_pnl": realized_pnl}
 
 
 def _run_daily_summary():
@@ -265,11 +291,15 @@ def _run_daily_summary():
     activity = _todays_activity()
     buys_str  = ", ".join(f"`{s}`" for s in activity["buys"])  or "none"
     sells_str = ", ".join(f"`{s}`" for s in activity["sells"]) or "none"
+    realized  = activity["realized_pnl"]
+    realized_icon = "🟢" if realized >= 0 else "🔴"
+    realized_str = f"{realized_icon} ${realized:+,.2f}" if activity["sells"] else "—"
     lines.append(
         f"\n📋 *Today's Activity*\n"
         f"Positions open:  {len(positions)}\n"
         f"Buys today:      {len(activity['buys'])} — {buys_str}\n"
-        f"Sells today:     {len(activity['sells'])} — {sells_str}"
+        f"Sells today:     {len(activity['sells'])} — {sells_str}\n"
+        f"Realized P&L:    {realized_str}"
     )
 
     send_summary("\n".join(lines))

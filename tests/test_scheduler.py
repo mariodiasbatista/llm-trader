@@ -682,7 +682,9 @@ class TestTodaysActivity:
         try:
             from scheduler.market_scheduler import _todays_activity
             result = _todays_activity()
-            assert result == {"buys": [], "sells": []}
+            assert result["buys"] == []
+            assert result["sells"] == []
+            assert result["realized_pnl"] == 0.0
         finally:
             logger_mod.TRADE_LOG = original
 
