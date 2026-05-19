@@ -337,6 +337,7 @@ def _build_schedule_message() -> str:
         (_status(open_t, close_t),     f"{_fmt(market_open)}–{_fmt(market_close)}", f"Trailing Stop (every {trailing_min}m)"),
         (_status(open_t, close_t),     f"{_fmt(market_open)}–{_fmt(market_close)}", f"Wheel Monitor (every {wheel_min}m)"),
         (_status(open_t, close_t),     f"{_fmt(market_open)}–{_fmt(market_close)}", f"AI Analyze (every {analyze_min}m)"),
+        ("🔄",                         "every 60m",                                 "Data Source Health Check"),
         (_status(close_t),             f"{_fmt(market_close)}",                     "Market Close"),
         (_status(summary_t),           f"{_fmt(summary_time)}",                     "Daily Summary"),
     ]
@@ -353,6 +354,35 @@ def _build_schedule_message() -> str:
 def _send_schedule() -> None:
     from core.notifier import send_message
     send_message(_build_schedule_message())
+
+
+def _check_data_source():
+    """Health-check Capitol Trades every 60 min — alert Telegram if scraper or API returns empty."""
+    from strategies.smart_money import _fetch_raw_scrape, _fetch_raw
+    issues = []
+
+    try:
+        rows = _fetch_raw_scrape(page=1)
+        if not rows:
+            issues.append("web scrape returned 0 rows — HTML structure may have changed")
+        else:
+            tlog(f"Data source check: web scrape OK ({len(rows)} rows)", 1)
+    except Exception as e:
+        issues.append(f"web scrape raised exception: {escape_md(str(e))}")
+
+    try:
+        rows = _fetch_raw(source="api", max_pages=1)
+        if not rows:
+            issues.append("API returned 0 rows")
+        else:
+            tlog(f"Data source check: API OK ({len(rows)} rows)", 1)
+    except Exception as e:
+        issues.append(f"API raised exception: {escape_md(str(e))}")
+
+    if issues:
+        from core.notifier import send_message, is_configured
+        msg = "⚠️ *Capitol Trades health check FAILED*\n" + "\n".join(f"• {i}" for i in issues)
+        tlog(msg, 3)
 
 
 _PID_FILE = BASE / "logs" / "scheduler.pid"
@@ -397,6 +427,7 @@ def start():
     schedule.every(analyze_min).minutes.do(_run_analyze)
     schedule.every().day.at(summary_time).do(_run_daily_summary)
     schedule.every(1).minutes.do(_poll_telegram)
+    schedule.every(60).minutes.do(_check_data_source)
 
     from core.notifier import is_configured, send_message, register_command
     register_command("/summary", "full portfolio snapshot with entry prices and stops", _run_daily_summary)
@@ -416,8 +447,9 @@ def start():
             f"Send /help for available commands."
         )
 
-    # Run trailing stop immediately on startup (don't wait for first interval)
+    # Run trailing stop and data source check immediately on startup
     _run_trailing_stop()
+    _check_data_source()
 
     while True:
         schedule.run_pending()

@@ -548,9 +548,9 @@ class TestBuildScheduleMessage:
 
     def test_pre_market_all_upcoming(self):
         msg = self._msg(8)
-        assert "🔄" not in msg
-        assert "✅" not in msg
+        # Market tasks are ⬜ before open; data source check is always 🔄
         assert "⬜" in msg
+        assert "Data Source Health Check" in msg
 
     def test_during_market_recurring_tasks_active(self):
         msg = self._msg(11)
@@ -614,6 +614,70 @@ class TestStart:
             start()
         sent = [c[0][0] for c in mock_send.call_args_list]
         assert any("LLM Trader started" in t for t in sent)
+
+
+# ── _check_data_source ───────────────────────────────────────────────────────
+
+class TestCheckDataSource:
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    @patch("strategies.smart_money._fetch_raw")
+    @patch("strategies.smart_money._fetch_raw_scrape")
+    def test_no_alert_when_both_return_data(self, mock_scrape, mock_api, _cfg, mock_send):
+        """No Telegram alert when scrape and API both return rows."""
+        import core.notifier as notifier
+        notifier._telegram_log_level = 2
+        mock_scrape.return_value = [{"ticker": "AAPL"}]
+        mock_api.return_value = [{"ticker": "AAPL"}]
+        from scheduler.market_scheduler import _check_data_source
+        _check_data_source()
+        sent = [c[0][0] for c in mock_send.call_args_list]
+        assert not any("FAILED" in t for t in sent)
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    @patch("strategies.smart_money._fetch_raw")
+    @patch("strategies.smart_money._fetch_raw_scrape")
+    def test_alert_when_scrape_returns_empty(self, mock_scrape, mock_api, _cfg, mock_send):
+        """Telegram alert sent when web scrape returns 0 rows."""
+        import core.notifier as notifier
+        notifier._telegram_log_level = 2
+        mock_scrape.return_value = []
+        mock_api.return_value = [{"ticker": "AAPL"}]
+        from scheduler.market_scheduler import _check_data_source
+        _check_data_source()
+        sent = [c[0][0] for c in mock_send.call_args_list]
+        assert any("FAILED" in t and "web scrape" in t for t in sent)
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    @patch("strategies.smart_money._fetch_raw")
+    @patch("strategies.smart_money._fetch_raw_scrape")
+    def test_alert_when_scrape_raises(self, mock_scrape, mock_api, _cfg, mock_send):
+        """Telegram alert sent when web scrape raises an exception."""
+        import core.notifier as notifier
+        notifier._telegram_log_level = 2
+        mock_scrape.side_effect = Exception("Connection refused")
+        mock_api.return_value = [{"ticker": "AAPL"}]
+        from scheduler.market_scheduler import _check_data_source
+        _check_data_source()
+        sent = [c[0][0] for c in mock_send.call_args_list]
+        assert any("FAILED" in t for t in sent)
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    @patch("strategies.smart_money._fetch_raw")
+    @patch("strategies.smart_money._fetch_raw_scrape")
+    def test_alert_when_api_returns_empty(self, mock_scrape, mock_api, _cfg, mock_send):
+        """Telegram alert sent when API returns 0 rows."""
+        import core.notifier as notifier
+        notifier._telegram_log_level = 2
+        mock_scrape.return_value = [{"ticker": "AAPL"}]
+        mock_api.return_value = []
+        from scheduler.market_scheduler import _check_data_source
+        _check_data_source()
+        sent = [c[0][0] for c in mock_send.call_args_list]
+        assert any("FAILED" in t and "API" in t for t in sent)
 
 
 # ── _todays_activity ──────────────────────────────────────────────────────────
