@@ -185,24 +185,64 @@ def _poll_telegram():
         save_state(state)
 
 
+def _all_entries_from_log() -> list:
+    """Read and parse every line from trades.log, skip malformed lines."""
+    from core.logger import TRADE_LOG
+    entries = []
+    if not TRADE_LOG.exists():
+        return entries
+    with open(TRADE_LOG) as f:
+        for line in f:
+            try:
+                entries.append(json.loads(line.strip()))
+            except Exception:
+                continue
+    return entries
+
+
+def _cumulative_realized_pnl() -> dict:
+    """Total realized P&L from all STOP_SELL / TAKE_PROFIT entries ever.
+
+    Uses weighted avg entry price per symbol across all historical buys.
+    Returns pnl ($), deployed ($), and roi_pct (%).
+    """
+    entries = _all_entries_from_log()
+
+    buy_totals: dict = {}
+    for e in entries:
+        if e.get("action") in ("AI_BUY_TRAILING", "AI_START_WHEEL", "LADDER_BUY"):
+            sym = e.get("symbol", "")
+            qty = float(e.get("qty", 0) or 0)
+            price = float(e.get("price", 0) or 0)
+            if qty > 0 and price > 0:
+                prev_qty, prev_cost = buy_totals.get(sym, (0, 0.0))
+                buy_totals[sym] = (prev_qty + qty, prev_cost + qty * price)
+
+    total_pnl = 0.0
+    for e in entries:
+        if e.get("action") in ("STOP_SELL", "TAKE_PROFIT"):
+            sym = e.get("symbol", "")
+            qty = float(e.get("qty", 0) or 0)
+            sell_price = float(e.get("price", 0) or 0)
+            total_qty, total_cost = buy_totals.get(sym, (0, 0.0))
+            if total_qty > 0:
+                avg_entry = total_cost / total_qty
+                total_pnl += (sell_price - avg_entry) * qty
+
+    deployed = sum(cost for _, cost in buy_totals.values())
+    roi_pct = (total_pnl / deployed * 100) if deployed > 0 else 0.0
+    return {"pnl": total_pnl, "deployed": deployed, "roi_pct": roi_pct}
+
+
 def _todays_activity() -> dict:
     """Return today's buy/sell tickers and realized P&L from sells."""
-    from core.logger import TRADE_LOG
     today = datetime.now(NY_TZ).strftime("%Y-%m-%d")
     buys, sells = [], []
     realized_pnl = 0.0
 
-    if not TRADE_LOG.exists():
+    all_entries = _all_entries_from_log()
+    if not all_entries:
         return {"buys": buys, "sells": sells, "realized_pnl": realized_pnl}
-
-    # Build a map of symbol → list of (qty, price) buys for entry-price lookup
-    all_entries: list = []
-    with open(TRADE_LOG) as f:
-        for line in f:
-            try:
-                all_entries.append(json.loads(line.strip()))
-            except Exception:
-                continue
 
     # Weighted avg entry price per symbol from all historical buys
     buy_totals: dict = {}
@@ -300,6 +340,13 @@ def _run_daily_summary():
         f"Buys today:      {len(activity['buys'])} — {buys_str}\n"
         f"Sells today:     {len(activity['sells'])} — {sells_str}\n"
         f"Realized P&L:    {realized_str}"
+    )
+
+    cum = _cumulative_realized_pnl()
+    cum_icon = "🟢" if cum["pnl"] >= 0 else "🔴"
+    lines.append(
+        f"\n💰 *Cumulative Realized P&L*\n"
+        f"{cum_icon} ${cum['pnl']:+,.2f}  ({cum['roi_pct']:+.2f}% on ${cum['deployed']:,.0f} deployed)"
     )
 
     send_summary("\n".join(lines))
