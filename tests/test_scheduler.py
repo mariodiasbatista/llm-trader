@@ -813,3 +813,63 @@ class TestTodaysActivity:
         finally:
             logger_mod.TRADE_LOG = original_log
             notifier._telegram_log_level = 2
+
+
+    def test_realized_pnl_calculated_from_buy_sell_pairs(self, tmp_path):
+        """When entries include qty+price, realized P&L is computed from sell vs avg entry."""
+        import core.logger as logger_mod
+        today = real_dt.now(_NY).strftime("%Y-%m-%d")
+        log = self._write_trades(tmp_path, [
+            {"ts": f"{today}T09:30:00", "action": "AI_BUY_TRAILING",
+             "symbol": "GE", "qty": 10, "price": 280.0},
+            {"ts": f"{today}T15:00:00", "action": "STOP_SELL",
+             "symbol": "GE", "qty": 10.0, "price": 300.0},
+        ])
+        original = logger_mod.TRADE_LOG
+        logger_mod.TRADE_LOG = log
+        try:
+            from scheduler.market_scheduler import _todays_activity, _cumulative_realized_pnl
+            activity = _todays_activity()
+            assert abs(activity["realized_pnl"] - 200.0) < 0.01  # (300-280)*10
+
+            cum = _cumulative_realized_pnl()
+            assert abs(cum["pnl"] - 200.0) < 0.01
+            assert cum["deployed"] == 2800.0
+            assert abs(cum["roi_pct"] - (200.0 / 2800.0 * 100)) < 0.01
+        finally:
+            logger_mod.TRADE_LOG = original
+
+
+# ── _check_data_source — API exception path ──────────────────────────────────
+
+class TestCheckDataSourceApiException:
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    @patch("strategies.smart_money._fetch_raw", side_effect=Exception("timeout"))
+    @patch("strategies.smart_money._fetch_raw_scrape")
+    def test_api_exception_logged_at_debug(self, mock_scrape, mock_api, _cfg, mock_send):
+        """API exception is captured and reported at severity 1 when scraper is OK."""
+        import core.notifier as notifier
+        notifier._telegram_log_level = 1
+        mock_scrape.return_value = [{"ticker": "AAPL"}]
+        from scheduler.market_scheduler import _check_data_source
+        _check_data_source()
+        sent = [c[0][0] for c in mock_send.call_args_list]
+        assert any("FAILED" in t and "API" in t for t in sent)
+        notifier._telegram_log_level = 2
+
+
+# ── _enforce_single_instance — stale PID path ────────────────────────────────
+
+class TestEnforceSingleInstanceStalePid:
+    def test_stale_pid_does_not_raise(self, tmp_path):
+        """If the PID in the file no longer exists, _enforce_single_instance must not raise."""
+        import scheduler.market_scheduler as sched
+        original = sched._PID_FILE
+        pid_file = tmp_path / "scheduler.pid"
+        pid_file.write_text("99999999")  # PID that almost certainly doesn't exist
+        sched._PID_FILE = pid_file
+        try:
+            sched._enforce_single_instance()  # must not raise
+        finally:
+            sched._PID_FILE = original
