@@ -233,9 +233,12 @@ def _handle_command(text: str) -> None:
         send_message("\n".join(lines))
 
     elif cmd[0] == "/loglevel":
-        lines = ["*Telegram Log Levels*"]
+        lines = [
+            f"*Telegram Log Levels*",
+            f"Current level: *{_telegram_log_level}* — {LEVEL_LEGEND[_telegram_log_level]}\n",
+        ]
         for lvl, desc in LEVEL_LEGEND.items():
-            marker = " ← active" if lvl == _telegram_log_level else ""
+            marker = " ✅" if lvl == _telegram_log_level else ""
             lines.append(f"`{lvl}` — {desc}{marker}")
         lines.append("\nUse `/setlevel N` to change.")
         send_message("\n".join(lines))
