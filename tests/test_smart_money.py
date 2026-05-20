@@ -23,30 +23,34 @@ class TestEstimateSize:
         assert _estimate_size("$50,001 - $100,000".upper()) == 75_000
 
 
+def _d(days_ago: int) -> str:
+    return (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+
+
 MOCK_TRADES = [
     {
-        "txDate": "2026-04-22",
+        "txDate": _d(2),
         "txType": "Buy",
         "size": "$100,001 - $250,000",
         "politician": {"name": "Michael McCaul", "id": "P001"},
         "asset": {"ticker": "NVDA", "assetType": "stock"},
     },
     {
-        "txDate": "2026-04-21",
+        "txDate": _d(3),
         "txType": "Buy",
         "size": "$1,001 - $15,000",          # below $50K threshold
         "politician": {"name": "Nancy Pelosi", "id": "P002"},
         "asset": {"ticker": "AAPL", "assetType": "stock"},
     },
     {
-        "txDate": "2026-04-20",
+        "txDate": _d(4),
         "txType": "Sell",                     # sell — excluded by default
         "size": "$500,001 - $1,000,000",
         "politician": {"name": "Josh Gottheimer", "id": "P003"},
         "asset": {"ticker": "MSFT", "assetType": "stock"},
     },
     {
-        "txDate": "2026-04-19",
+        "txDate": _d(5),
         "txType": "Buy",
         "size": "$250,001 - $500,000",
         "politician": {"name": "Tom Reed", "id": "P004"},

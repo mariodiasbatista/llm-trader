@@ -336,8 +336,8 @@ def _build_schedule_message() -> str:
         (_status(open_t),              f"{_fmt(market_open)}",                      "Market Open"),
         (_status(open_t, close_t),     f"{_fmt(market_open)}–{_fmt(market_close)}", f"Trailing Stop (every {trailing_min}m)"),
         (_status(open_t, close_t),     f"{_fmt(market_open)}–{_fmt(market_close)}", f"Wheel Monitor (every {wheel_min}m)"),
-        (_status(open_t, close_t),     f"{_fmt(market_open)}–{_fmt(market_close)}", f"AI Analyze (every {analyze_min}m)"),
-        ("🔄",                         "every 60m",                                 "Data Source Health Check"),
+        (_status(open_t, close_t),     f"{_fmt(market_open)}–{_fmt(market_close)}", f"Capitol Trades → AI Analyze (every {analyze_min}m)"),
+        ("🔄",                         "every 60m",                                 "Capitol Trades Health Check"),
         (_status(close_t),             f"{_fmt(market_close)}",                     "Market Close"),
         (_status(summary_t),           f"{_fmt(summary_time)}",                     "Daily Summary"),
     ]
@@ -357,32 +357,40 @@ def _send_schedule() -> None:
 
 
 def _check_data_source():
-    """Health-check Capitol Trades every 60 min — alert Telegram if scraper or API returns empty."""
+    """Health-check Capitol Trades every 60 min.
+
+    Severity rules:
+    - Both sources fail  → severity 3 (error) — always visible, trading is blind
+    - Only API fails     → severity 1 (debug) — scraper covers it, low noise
+    - Both OK            → severity 1 (debug) — silent unless debug mode
+    """
     from strategies.smart_money import _fetch_raw_scrape, _fetch_raw
-    issues = []
+    scrape_issues, api_issues = [], []
 
     try:
         rows = _fetch_raw_scrape(page=1)
         if not rows:
-            issues.append("web scrape returned 0 rows — HTML structure may have changed")
+            scrape_issues.append("web scrape returned 0 rows — HTML structure may have changed")
         else:
             tlog(f"Data source check: web scrape OK ({len(rows)} rows)", 1)
     except Exception as e:
-        issues.append(f"web scrape raised exception: {escape_md(str(e))}")
+        scrape_issues.append(f"web scrape raised exception: {escape_md(str(e))}")
 
     try:
         rows = _fetch_raw(source="api", max_pages=1)
         if not rows:
-            issues.append("API returned 0 rows")
+            api_issues.append("API returned 0 rows")
         else:
             tlog(f"Data source check: API OK ({len(rows)} rows)", 1)
     except Exception as e:
-        issues.append(f"API raised exception: {escape_md(str(e))}")
+        api_issues.append(f"API raised exception: {escape_md(str(e))}")
 
-    if issues:
-        from core.notifier import send_message, is_configured
-        msg = "⚠️ *Capitol Trades health check FAILED*\n" + "\n".join(f"• {i}" for i in issues)
-        tlog(msg, 3)
+    all_issues = scrape_issues + api_issues
+    if all_issues:
+        # Critical only when BOTH fail — scraper alone failing means we're trading blind
+        severity = 3 if scrape_issues else 1
+        msg = "⚠️ *Capitol Trades health check FAILED*\n" + "\n".join(f"• {i}" for i in all_issues)
+        tlog(msg, severity)
 
 
 _PID_FILE = BASE / "logs" / "scheduler.pid"

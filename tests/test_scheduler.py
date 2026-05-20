@@ -550,7 +550,7 @@ class TestBuildScheduleMessage:
         msg = self._msg(8)
         # Market tasks are ⬜ before open; data source check is always 🔄
         assert "⬜" in msg
-        assert "Data Source Health Check" in msg
+        assert "Capitol Trades Health Check" in msg
 
     def test_during_market_recurring_tasks_active(self):
         msg = self._msg(11)
@@ -668,16 +668,33 @@ class TestCheckDataSource:
     @patch("core.notifier.is_configured", return_value=True)
     @patch("strategies.smart_money._fetch_raw")
     @patch("strategies.smart_money._fetch_raw_scrape")
-    def test_alert_when_api_returns_empty(self, mock_scrape, mock_api, _cfg, mock_send):
-        """Telegram alert sent when API returns 0 rows."""
+    def test_api_only_failure_is_debug_level(self, mock_scrape, mock_api, _cfg, mock_send):
+        """API-only failure is severity 1 (debug) — not sent at log level 2 since scraper covers it."""
         import core.notifier as notifier
-        notifier._telegram_log_level = 2
+        notifier._telegram_log_level = 2  # info — debug messages suppressed
+        mock_scrape.return_value = [{"ticker": "AAPL"}]
+        mock_api.return_value = []
+        from scheduler.market_scheduler import _check_data_source
+        _check_data_source()
+        # At level 2, a severity-1 message is NOT forwarded to Telegram
+        sent = [c[0][0] for c in mock_send.call_args_list]
+        assert not any("FAILED" in t for t in sent)
+
+    @patch("core.notifier.send_message")
+    @patch("core.notifier.is_configured", return_value=True)
+    @patch("strategies.smart_money._fetch_raw")
+    @patch("strategies.smart_money._fetch_raw_scrape")
+    def test_api_only_failure_visible_at_debug_level(self, mock_scrape, mock_api, _cfg, mock_send):
+        """API-only failure IS visible when log level is 1 (debug)."""
+        import core.notifier as notifier
+        notifier._telegram_log_level = 1
         mock_scrape.return_value = [{"ticker": "AAPL"}]
         mock_api.return_value = []
         from scheduler.market_scheduler import _check_data_source
         _check_data_source()
         sent = [c[0][0] for c in mock_send.call_args_list]
         assert any("FAILED" in t and "API" in t for t in sent)
+        notifier._telegram_log_level = 2
 
 
 # ── _todays_activity ──────────────────────────────────────────────────────────

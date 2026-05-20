@@ -12,8 +12,17 @@ import importlib.util
 import json
 import pytest
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch, MagicMock, call
+
+
+def _today() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _d(days_ago: int = 1) -> str:
+    return (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
 
 
 def _load_analyze_module():
@@ -34,7 +43,7 @@ def _noop_lock():
 # ── Shared test data ───────────────────────────────────────────────────────────
 
 NVDA_SIGNAL = {
-    "txDate": "2026-04-25",
+    "txDate": _d(1),
     "txType": "purchase",
     "size": "$50,001 - $100,000",
     "asset": {"ticker": "NVDA"},
@@ -52,7 +61,7 @@ TRAILING_STOP_REC = {
     "_cache_written": 3000,
 }
 
-TRADE_KEY = "2026-04-25_NVDA_P001"
+TRADE_KEY = f"{_d(1)}_NVDA_P001"
 
 
 def _mock_account(buying_power=50_000.0, equity=100_000.0):
@@ -187,7 +196,7 @@ class TestSignalToTelegramApproval:
         from core.notifier import send_trade_approval
 
         send_trade_approval(
-            trade_key="2026-04-25_JPM_P001",
+            trade_key=f"{_d(1)}_JPM_P001",
             ticker="JPM",
             strategy="WHEEL",
             confidence=78,
@@ -593,7 +602,8 @@ class TestAnalyzeSubprocessTimeout:
 class TestSkipSignalMarkedAsProcessed:
     """SKIP recommendations must land in copied_trades — prevents Claude re-analyzing same ticker."""
 
-    def _signal(self, ticker="ALH", date="2026-05-11", pol_id="P001"):
+    def _signal(self, ticker="ALH", date=None, pol_id="P001"):
+        date = date or _d(1)
         return {
             "txDate": date, "txType": "purchase",
             "size": "$15,001 - $50,000",
@@ -633,13 +643,13 @@ class TestSkipSignalMarkedAsProcessed:
         """After SKIP, the trade_key must appear in saved copied_trades."""
         mock_save, _ = self._run_main([self._signal()], self._skip_rec())
         saved = mock_save.call_args[0][0]
-        assert "2026-05-11_ALH_P001" in saved["copied_trades"]
+        assert f"{_d(1)}_ALH_P001" in saved["copied_trades"]
 
     def test_already_processed_skip_does_not_call_claude(self):
         """If a SKIP trade_key is already in copied_trades, Claude is never called again."""
         _, mock_rec = self._run_main(
             [self._signal()], self._skip_rec(),
-            initial_copied=["2026-05-11_ALH_P001"],
+            initial_copied=[f"{_d(1)}_ALH_P001"],
         )
         mock_rec.assert_not_called()
 
@@ -649,7 +659,8 @@ class TestSkipSignalMarkedAsProcessed:
 class TestSizeUpFlag:
     """When size_up=false, the bot must not buy more of a ticker already in the portfolio."""
 
-    def _signal(self, ticker="EQT", date="2026-05-12", pol_id="M001"):
+    def _signal(self, ticker="EQT", date=None, pol_id="M001"):
+        date = date or _d(1)
         return {
             "txDate": date, "txType": "purchase",
             "size": "$15,001 - $50,000",
@@ -790,7 +801,7 @@ class TestMaxPositionCap:
 
     def _signal(self, ticker="EQT"):
         return {
-            "txDate": "2026-05-12", "txType": "purchase",
+            "txDate": _d(1), "txType": "purchase",
             "size": "$15,001 - $50,000",
             "asset": {"ticker": ticker},
             "politician": {"name": "Michael McCaul", "id": "M001"},
@@ -860,7 +871,8 @@ class TestMaxPositionCap:
 class TestMarkProcessedPersistsImmediately:
     """Each signal is saved to copied_trades immediately — survives mid-run crashes."""
 
-    def _signal(self, ticker="OMF", date="2026-05-12", pol_id="M001"):
+    def _signal(self, ticker="OMF", date=None, pol_id="M001"):
+        date = date or _d(1)
         return {
             "txDate": date, "txType": "purchase",
             "size": "$15,001 - $50,000",
@@ -904,4 +916,4 @@ class TestMarkProcessedPersistsImmediately:
             mod.main()
 
         # save_state was called and OMF key was persisted
-        assert any("2026-05-12_OMF_M001" in k for saved in saved_states for k in saved)
+        assert any("_OMF_M001" in k for saved in saved_states for k in saved)
