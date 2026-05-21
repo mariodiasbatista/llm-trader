@@ -836,6 +836,8 @@ class TestTodaysActivity:
             assert abs(cum["pnl"] - 200.0) < 0.01
             assert cum["deployed"] == 2800.0
             assert abs(cum["roi_pct"] - (200.0 / 2800.0 * 100)) < 0.01
+            assert cum["wins"] == 1
+            assert cum["losses"] == 0
         finally:
             logger_mod.TRADE_LOG = original
 

@@ -204,7 +204,7 @@ def _cumulative_realized_pnl() -> dict:
     """Total realized P&L from all STOP_SELL / TAKE_PROFIT entries ever.
 
     Uses weighted avg entry price per symbol across all historical buys.
-    Returns pnl ($), deployed ($), and roi_pct (%).
+    Returns pnl ($), deployed ($), roi_pct (%), wins (int), losses (int).
     """
     entries = _all_entries_from_log()
 
@@ -219,6 +219,8 @@ def _cumulative_realized_pnl() -> dict:
                 buy_totals[sym] = (prev_qty + qty, prev_cost + qty * price)
 
     total_pnl = 0.0
+    wins = 0
+    losses = 0
     for e in entries:
         if e.get("action") in ("STOP_SELL", "TAKE_PROFIT"):
             sym = e.get("symbol", "")
@@ -227,11 +229,16 @@ def _cumulative_realized_pnl() -> dict:
             total_qty, total_cost = buy_totals.get(sym, (0, 0.0))
             if total_qty > 0:
                 avg_entry = total_cost / total_qty
-                total_pnl += (sell_price - avg_entry) * qty
+                trade_pnl = (sell_price - avg_entry) * qty
+                total_pnl += trade_pnl
+                if trade_pnl >= 0:
+                    wins += 1
+                else:
+                    losses += 1
 
     deployed = sum(cost for _, cost in buy_totals.values())
     roi_pct = (total_pnl / deployed * 100) if deployed > 0 else 0.0
-    return {"pnl": total_pnl, "deployed": deployed, "roi_pct": roi_pct}
+    return {"pnl": total_pnl, "deployed": deployed, "roi_pct": roi_pct, "wins": wins, "losses": losses}
 
 
 def _todays_activity() -> dict:
@@ -344,9 +351,10 @@ def _run_daily_summary():
 
     cum = _cumulative_realized_pnl()
     cum_icon = "🟢" if cum["pnl"] >= 0 else "🔴"
+    wl_str = f"  ({cum['wins']}w/{cum['losses']}l all-time)" if (cum["wins"] + cum["losses"]) > 0 else ""
     lines.append(
         f"\n💰 *Cumulative Realized P&L*\n"
-        f"{cum_icon} ${cum['pnl']:+,.2f}  ({cum['roi_pct']:+.2f}% on ${cum['deployed']:,.0f} deployed)"
+        f"{cum_icon} ${cum['pnl']:+,.2f}  ({cum['roi_pct']:+.2f}% on ${cum['deployed']:,.0f} deployed){wl_str}"
     )
 
     send_summary("\n".join(lines))
