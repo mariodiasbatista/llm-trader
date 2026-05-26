@@ -41,35 +41,38 @@ def _run_trailing_stop():
         return
     from strategies.trailing_stop import check_and_update
     from core.notifier import send_stop_alert, send_ladder_alert
-    tlog("Trailing stop check...", 2)
     result = check_and_update()
     checked = len(result["checked"])
     stopped = result["stopped_out"]
     laddered = result["laddered"]
-    msg = f"Checked {checked} positions"
-    if stopped:
-        msg += f" | STOPPED OUT: {', '.join(stopped)}"
-        for item in result["checked"]:
-            if item["symbol"] in stopped:
-                send_stop_alert(
-                    item["symbol"], item["price"], item["floor"],
-                    item.get("entry", 0), item.get("qty", 0),
-                )
-    if laddered:
-        msg += f" | Ladder buys: {len(laddered)}"
-        for item in laddered:
-            send_ladder_alert(item["symbol"], item["qty"], item["price"], 0)
-    tlog(msg, 2)
+    if checked > 0 or stopped or laddered:
+        tlog("Trailing stop check...", 2)
+        msg = f"Checked {checked} positions"
+        if stopped:
+            msg += f" | STOPPED OUT: {', '.join(stopped)}"
+            for item in result["checked"]:
+                if item["symbol"] in stopped:
+                    send_stop_alert(
+                        item["symbol"], item["price"], item["floor"],
+                        item.get("entry", 0), item.get("qty", 0),
+                    )
+        if laddered:
+            msg += f" | Ladder buys: {len(laddered)}"
+            for item in laddered:
+                send_ladder_alert(item["symbol"], item["qty"], item["price"], 0)
+        tlog(msg, 2)
 
 
 def _run_wheel():
     if not is_market_open():
         return
     from strategies.wheel import check_and_manage
-    tlog("Wheel check...", 2)
     result = check_and_manage()
-    for action in result.get("actions", []):
-        tlog(f"  {action}", 2)
+    actions = result.get("actions", [])
+    if actions:
+        tlog("Wheel check...", 2)
+        for action in actions:
+            tlog(f"  {action}", 2)
 
 
 def _run_analyze():

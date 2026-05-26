@@ -99,9 +99,8 @@ Account Context:
 Respond with JSON only."""
 
     response = client.messages.create(
-        model="claude-opus-4-7",
+        model="claude-sonnet-4-6",
         max_tokens=512,
-        thinking={"type": "adaptive"},
         system=[
             {
                 "type": "text",

@@ -43,7 +43,30 @@
       "Bash(chmod 600 /swapfile)",
       "Bash(mkswap /swapfile)",
       "Bash(swapon /swapfile)",
-      "Bash(echo '/swapfile none swap sw 0 0')"
+      "Bash(echo '/swapfile none swap sw 0 0')",
+      "Bash(python *)",
+      "mcp__alpaca__get_all_positions",
+      "mcp__alpaca__get_stock_latest_quote",
+      "Bash(python3 *)",
+      "Bash(tmux ls *)",
+      "Bash(systemctl restart *)",
+      "Bash(journalctl *)",
+      "Bash(systemctl is-active *)",
+      "Bash(top -bn1)",
+      "Bash(ps *)",
+      "Bash(gh api *)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "mcp__claude_ai_Google_Drive__create_file",
+      "mcp__claude_ai_Google_Drive__download_file_content",
+      "mcp__alpaca__get_account_info",
+      "Bash(awk '{print \"PID \"$2\" started \"$9}')",
+      "Bash(awk '{print \"PID \"$2}')",
+      "Bash(sudo systemctl *)",
+      "Bash(.venv/bin/python3 *)",
+      "Bash(grep -n '`/help`\\\\|`/loglevel`\\\\|`/summary`\\\\|`/schedule`\\\\|backtick\\\\|cmd_name.*assert\\\\|assert.*cmd_name\\\\|/help.*message\\\\|loglevel.*Telegram' /var/projects/llmTrader/tests/test_notifier.py)",
+      "Bash(sudo kill *)",
+      "Bash(sudo cp *)",
+      "Bash(kill -9 397226)"
     ]
   }
 }

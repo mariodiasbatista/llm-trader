@@ -38,7 +38,7 @@
     "size_up": true,
     "max_position_usd": 10000
   },
-  "telegram_log_level": 1,
+  "telegram_log_level": 2,
   "schedule": {
     "trailing_stop_interval_min": 5,
     "wheel_interval_min": 15,
