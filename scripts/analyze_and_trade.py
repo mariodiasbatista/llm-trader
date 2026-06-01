@@ -87,6 +87,7 @@ def main():
 
     results = []
     tokens_saved_total = 0
+    seen_this_run: set = set()
 
     import json as _json
     _cfg_path = Path(__file__).parent.parent / "config" / "settings.json"
@@ -99,18 +100,21 @@ def main():
         if not ticker or not ticker.replace(".", "").isalpha():
             continue
 
-        # Skip already-processed signals
+        # Skip already-processed signals (persisted state) or duplicates seen this run
         trade_key = (
             f"{trade.get('txDate')}_{ticker}_{trade.get('politician', {}).get('id', '')}"
         )
-        if trade_key in state.get("copied_trades", []):
+        if trade_key in state.get("copied_trades", []) or trade_key in seen_this_run:
             log.info(f"[{ticker}] Already processed — skipping")
             continue
+        seen_this_run.add(trade_key)
 
-        # Drop signals whose txDate is older than the configured lookback window.
-        # The web scraper sometimes returns stale disclosures outside the intended range.
-        if _days_since(trade.get("txDate", "")) > args.days:
-            log.info(f"[{ticker}] Signal too old ({trade.get('txDate')}) — skipping")
+        # Drop signals published more than `days` ago. Using publishedDate (when the
+        # disclosure was filed) rather than txDate (when the trade occurred) ensures
+        # recently-filed disclosures are always evaluated even if the trade itself is old.
+        pub_date = trade.get("publishedDate") or trade.get("txDate", "")
+        if _days_since(pub_date) > args.days:
+            log.info(f"[{ticker}] Signal too old (pub={pub_date}) — skipping")
             _mark_processed(trade_key)
             continue
 
