@@ -917,3 +917,160 @@ class TestMarkProcessedPersistsImmediately:
 
         # save_state was called and OMF key was persisted
         assert any("_OMF_M001" in k for saved in saved_states for k in saved)
+
+
+# ── 10. Intra-run deduplication (seen_this_run) ───────────────────────────────
+
+class TestIntraRunDeduplication:
+    """Duplicate signals with the same trade_key in one batch only trigger Claude once."""
+
+    def _signal(self, ticker="NVDA", date=None, pol_id="P001"):
+        date = date or _d(1)
+        return {
+            "txDate": date, "txType": "purchase",
+            "size": "$50,001 - $100,000",
+            "asset": {"ticker": ticker},
+            "politician": {"name": "Michael McCaul", "id": pol_id},
+        }
+
+    def _skip_rec(self):
+        return {
+            "strategy": "SKIP", "confidence": 0, "reasoning": "test",
+            "suggested_position_size_pct": 0.0, "key_risk": "",
+            "_cache_hit": False, "_tokens_saved": 0,
+        }
+
+    def _run(self, signals):
+        mod = _load_analyze_module()
+        acct = MagicMock()
+        acct.buying_power = 50_000.0
+        state = {"positions": {}, "wheel": {}, "copied_trades": [], "pending_trades": {}}
+        import json
+        settings = {"analyze": {"size_up": False}, "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {}}
+        with patch.object(mod, "get_account", return_value=acct), \
+             patch.object(mod, "get_positions", return_value=[]), \
+             patch.object(mod, "get_latest_price", return_value=875.0), \
+             patch.object(mod, "fetch_large_trades", return_value=signals), \
+             patch.object(mod, "get_recommendation", return_value=self._skip_rec()) as mock_rec, \
+             patch.object(mod, "load_state", return_value=state), \
+             patch.object(mod, "save_state"), \
+             patch.object(mod, "state_lock", _noop_lock), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(settings)), \
+             patch("sys.argv", ["analyze_and_trade.py"]):
+            mod.main()
+        return mock_rec
+
+    def test_duplicate_signal_calls_claude_only_once(self):
+        """Two identical signals in one batch must result in exactly one Claude call."""
+        sig = self._signal()
+        mock_rec = self._run([sig, sig])
+        assert mock_rec.call_count == 1
+
+    def test_three_duplicate_signals_calls_claude_only_once(self):
+        """Three copies of the same signal still results in exactly one Claude call."""
+        sig = self._signal()
+        mock_rec = self._run([sig, sig, sig])
+        assert mock_rec.call_count == 1
+
+    def test_two_different_tickers_both_reach_claude(self):
+        """Two signals with different tickers must each reach Claude independently."""
+        mock_rec = self._run([self._signal("NVDA"), self._signal("AAPL")])
+        assert mock_rec.call_count == 2
+
+    def test_same_ticker_different_politician_both_reach_claude(self):
+        """Same ticker disclosed by two politicians = two distinct keys, both reach Claude."""
+        mock_rec = self._run([
+            self._signal("NVDA", pol_id="P001"),
+            self._signal("NVDA", pol_id="P002"),
+        ])
+        assert mock_rec.call_count == 2
+
+    def test_same_ticker_different_date_both_reach_claude(self):
+        """Same politician buying same ticker on two different dates = two keys."""
+        mock_rec = self._run([
+            self._signal("NVDA", date=_d(1)),
+            self._signal("NVDA", date=_d(2)),
+        ])
+        assert mock_rec.call_count == 2
+
+
+# ── 11. publishedDate staleness filter ───────────────────────────────────────
+
+class TestPublishedDateStalenessFilter:
+    """Staleness is checked against publishedDate, not txDate."""
+
+    def _signal(self, ticker="HD", tx_days_ago=14, pub_days_ago=2, pol_id="P001"):
+        return {
+            "txDate": _d(tx_days_ago),
+            "publishedDate": _d(pub_days_ago),
+            "txType": "purchase",
+            "size": "$15,001 - $50,000",
+            "asset": {"ticker": ticker},
+            "politician": {"name": "David Taylor", "id": pol_id},
+        }
+
+    def _skip_rec(self):
+        return {
+            "strategy": "SKIP", "confidence": 0, "reasoning": "test",
+            "suggested_position_size_pct": 0.0, "key_risk": "",
+            "_cache_hit": False, "_tokens_saved": 0,
+        }
+
+    def _run(self, signals, days=7):
+        mod = _load_analyze_module()
+        acct = MagicMock()
+        acct.buying_power = 50_000.0
+        state = {"positions": {}, "wheel": {}, "copied_trades": [], "pending_trades": {}}
+        import json
+        settings = {"analyze": {"size_up": False}, "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {}}
+        with patch.object(mod, "get_account", return_value=acct), \
+             patch.object(mod, "get_positions", return_value=[]), \
+             patch.object(mod, "get_latest_price", return_value=308.0), \
+             patch.object(mod, "fetch_large_trades", return_value=signals), \
+             patch.object(mod, "get_recommendation", return_value=self._skip_rec()) as mock_rec, \
+             patch.object(mod, "load_state", return_value=state), \
+             patch.object(mod, "save_state"), \
+             patch.object(mod, "state_lock", _noop_lock), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(settings)), \
+             patch("sys.argv", ["analyze_and_trade.py", "-d", str(days)]):
+            mod.main()
+        return mock_rec
+
+    def test_old_txdate_but_fresh_publisheddate_reaches_claude(self):
+        """txDate=14d ago, publishedDate=2d ago → within 7-day window, Claude is called."""
+        mock_rec = self._run([self._signal(tx_days_ago=14, pub_days_ago=2)])
+        mock_rec.assert_called_once()
+
+    def test_old_publisheddate_is_filtered_regardless_of_txdate(self):
+        """publishedDate=10d ago → exceeds 7-day window, Claude is never called."""
+        mock_rec = self._run([self._signal(tx_days_ago=3, pub_days_ago=10)])
+        mock_rec.assert_not_called()
+
+    def test_fresh_publisheddate_on_day_of_publication_reaches_claude(self):
+        """publishedDate=today (0 days ago) → always within window, Claude is called."""
+        mock_rec = self._run([self._signal(tx_days_ago=20, pub_days_ago=0)])
+        mock_rec.assert_called_once()
+
+    def test_signal_without_publisheddate_falls_back_to_txdate(self):
+        """No publishedDate field → falls back to txDate; old txDate gets filtered."""
+        sig = {
+            "txDate": _d(10),
+            "txType": "purchase",
+            "size": "$15,001 - $50,000",
+            "asset": {"ticker": "HD"},
+            "politician": {"name": "David Taylor", "id": "P001"},
+        }
+        mock_rec = self._run([sig])
+        mock_rec.assert_not_called()
+
+    def test_signal_without_publisheddate_fresh_txdate_reaches_claude(self):
+        """No publishedDate, but txDate is within window → Claude is called."""
+        sig = {
+            "txDate": _d(2),
+            "txType": "purchase",
+            "size": "$15,001 - $50,000",
+            "asset": {"ticker": "HD"},
+            "politician": {"name": "David Taylor", "id": "P001"},
+        }
+        mock_rec = self._run([sig])
+        mock_rec.assert_called_once()
