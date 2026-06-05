@@ -10,6 +10,10 @@ source .venv/bin/activate
 pip install --upgrade pip -q
 pip install -r requirements.txt -q
 
+echo "Installing Playwright browser (required for Capitol Trades scraper)..."
+python -m playwright install chromium
+python -m playwright install-deps chromium
+
 if [ ! -f credentials.json ]; then
     cp credentials.json.example credentials.json
     echo ""
