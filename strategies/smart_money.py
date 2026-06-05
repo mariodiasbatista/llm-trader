@@ -54,6 +54,9 @@ _SCRAPE_HEADERS = {
     "Accept": "text/html,application/xhtml+xml",
 }
 
+# Playwright wait timeout in ms — long enough for Vercel checkpoint + JS render
+_PLAYWRIGHT_TIMEOUT = 30_000
+
 
 def _settings() -> dict:
     with open(SETTINGS_FILE) as f:
@@ -96,23 +99,53 @@ def _parse_scrape_date(day: str, month_year: str) -> str:
 
 
 def _fetch_raw_scrape(page: int = 1) -> list:
-    """Scrape the Capitol Trades website as a fallback when the API is down."""
-    from bs4 import BeautifulSoup
+    """Scrape the Capitol Trades website using a headless browser.
 
+    Uses Playwright so the Vercel JS security checkpoint is executed and
+    the page fully renders before we extract rows — plain requests gets a
+    429 + bot-detection wall.
+    """
+    from bs4 import BeautifulSoup
+    from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+
+    url = CAPITOL_TRADES_WEB + (f"?page={page}" if page > 1 else "")
+    html = ""
     try:
-        params = {"page": page} if page > 1 else {}
-        resp = requests.get(
-            CAPITOL_TRADES_WEB,
-            params=params,
-            headers=_SCRAPE_HEADERS,
-            timeout=20,
-        )
-        resp.raise_for_status()
-    except requests.RequestException as e:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            ctx = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 800},
+                locale="en-US",
+            )
+            # Mask the webdriver flag so Vercel's JS challenge passes
+            ctx.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            )
+            pg = ctx.new_page()
+            pg.goto(url, wait_until="networkidle", timeout=_PLAYWRIGHT_TIMEOUT)
+            # Vercel checkpoint auto-resolves once the JS challenge completes
+            pg.wait_for_function(
+                "document.title !== 'Vercel Security Checkpoint'",
+                timeout=_PLAYWRIGHT_TIMEOUT,
+            )
+            pg.wait_for_selector("tbody tr", timeout=_PLAYWRIGHT_TIMEOUT)
+            html = pg.content()
+            browser.close()
+    except PWTimeout:
+        log.warning("Capitol Trades scrape timed out waiting for trade rows")
+        return []
+    except Exception as e:
         log.error(f"Capitol Trades web scrape failed: {e}")
         return []
 
-    soup = BeautifulSoup(resp.text, "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
     rows = soup.select("tbody tr")
     trades = []
 
