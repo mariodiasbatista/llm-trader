@@ -94,6 +94,8 @@ def main():
     _analyze_cfg = _json.loads(_cfg_path.read_text()).get("analyze", {})
     size_up = _analyze_cfg.get("size_up", False)
     max_position_usd = _analyze_cfg.get("max_position_usd", None)
+    stop_cooldown_days = _analyze_cfg.get("stop_cooldown_days", 0)
+    stopped_out_dates = state.get("stopped_out", {})
 
     for trade in buy_signals:
         ticker = trade.get("asset", {}).get("ticker", "")
@@ -117,6 +119,14 @@ def main():
             log.info(f"[{ticker}] Signal too old (pub={pub_date}) — skipping")
             _mark_processed(trade_key)
             continue
+
+        # Cooldown: skip tickers recently stopped out
+        if stop_cooldown_days > 0 and ticker in stopped_out_dates:
+            days_since_stop = _days_since(stopped_out_dates[ticker])
+            if days_since_stop < stop_cooldown_days:
+                log.info(f"[{ticker}] Cooldown active — stopped {days_since_stop}d ago, skipping for {stop_cooldown_days - days_since_stop}d more")
+                _mark_processed(trade_key)
+                continue
 
         # Position size guard
         if ticker in existing_tickers:

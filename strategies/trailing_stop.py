@@ -7,6 +7,7 @@ Phase 2 — Trailing Stop Strategy
 - Laddered buys: auto-purchases more shares on steep dips
 """
 import json
+from datetime import datetime
 from pathlib import Path
 
 from core.alpaca import get_positions, get_latest_price, close_position, market_buy, get_account
@@ -130,6 +131,7 @@ def check_and_update() -> dict:
                     log_trade("STOP_SELL", symbol, qty, price, f"floor={ps['stop_floor']:.2f}")
                     summary["stopped_out"].append(symbol)
                     del state["positions"][symbol]
+                    state.setdefault("stopped_out", {})[symbol] = datetime.now().strftime("%Y-%m-%d")
                     continue
                 except Exception as e:
                     log.error(f"[{symbol}] Stop-sell failed: {e}")
