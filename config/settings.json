@@ -37,7 +37,8 @@
   "analyze": {
     "size_up": false,
     "max_position_usd": 10000,
-    "stop_cooldown_days": 5
+    "stop_cooldown_days": 5,
+    "max_txdate_age_days": 14
   },
   "telegram_log_level": 2,
   "schedule": {

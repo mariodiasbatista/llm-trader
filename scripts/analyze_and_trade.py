@@ -95,6 +95,7 @@ def main():
     size_up = _analyze_cfg.get("size_up", False)
     max_position_usd = _analyze_cfg.get("max_position_usd", None)
     stop_cooldown_days = _analyze_cfg.get("stop_cooldown_days", 0)
+    max_txdate_age_days = _analyze_cfg.get("max_txdate_age_days", 0)
     stopped_out_dates = state.get("stopped_out", {})
 
     for trade in buy_signals:
@@ -119,6 +120,17 @@ def main():
             log.info(f"[{ticker}] Signal too old (pub={pub_date}) — skipping")
             _mark_processed(trade_key)
             continue
+
+        # Reject stale underlying trades — politicians can file up to 45 days late,
+        # but if the actual trade (txDate) is older than max_txdate_age_days the move
+        # has already played out and we'd be buying the tail, not the signal.
+        if max_txdate_age_days > 0:
+            tx_date = trade.get("txDate", "")
+            tx_age = _days_since(tx_date)
+            if tx_age > max_txdate_age_days:
+                log.info(f"[{ticker}] Trade too old (txDate={tx_date}, {tx_age}d ago) — skipping late filer")
+                _mark_processed(trade_key)
+                continue
 
         # Cooldown: skip tickers recently stopped out
         if stop_cooldown_days > 0 and ticker in stopped_out_dates:

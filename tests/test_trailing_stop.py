@@ -381,3 +381,52 @@ class TestTrailingStopExceptionHandlers:
         from strategies.trailing_stop import check_and_update
         result = check_and_update()  # must not raise
         assert isinstance(result, dict)
+
+
+# ── Stop-out cooldown recording ───────────────────────────────────────────────
+
+class TestStopOutCooldownRecording:
+    """After a STOP_SELL fires, trailing_stop records the date in state['stopped_out']."""
+
+    def _patched_run(self, initial_state):
+        from strategies.trailing_stop import check_and_update
+        with patch("strategies.trailing_stop._settings", return_value=SETTINGS["trailing_stop"]), \
+             patch("strategies.trailing_stop.get_positions",
+                   return_value=[_make_position("MSFT", 88.0, 100.0)]), \
+             patch("strategies.trailing_stop.log_trade"), \
+             patch("strategies.trailing_stop.close_position"), \
+             patch("strategies.trailing_stop.load_state", return_value=initial_state), \
+             patch("strategies.trailing_stop.save_state") as mock_save:
+            check_and_update()
+        return mock_save.call_args[0][0]
+
+    def test_stop_out_date_recorded_in_state(self):
+        """When a stop fires, today's date is saved under state['stopped_out'][symbol]."""
+        from datetime import datetime
+        state = _state_with("MSFT", 90.0, 100.0, 100.0, profit_stop_active=True)
+        saved = self._patched_run(state)
+        assert "stopped_out" in saved
+        assert "MSFT" in saved["stopped_out"]
+        assert saved["stopped_out"]["MSFT"] == datetime.now().strftime("%Y-%m-%d")
+
+    def test_stop_out_does_not_overwrite_other_tickers(self):
+        """Recording a stop-out for one ticker leaves other stopped_out entries intact."""
+        from datetime import datetime
+        state = _state_with("MSFT", 90.0, 100.0, 100.0, profit_stop_active=True)
+        state["stopped_out"] = {"AAPL": "2026-06-08"}
+        saved = self._patched_run(state)
+        assert saved["stopped_out"]["AAPL"] == "2026-06-08"
+        assert "MSFT" in saved["stopped_out"]
+
+    def test_no_stop_out_recorded_when_floor_not_breached(self):
+        """When the price is above the floor, no stopped_out entry is written."""
+        state = _state_with("MSFT", 85.0, 100.0, 100.0, profit_stop_active=True)
+        with patch("strategies.trailing_stop._settings", return_value=SETTINGS["trailing_stop"]), \
+             patch("strategies.trailing_stop.get_positions",
+                   return_value=[_make_position("MSFT", 90.0, 100.0)]), \
+             patch("strategies.trailing_stop.load_state", return_value=state), \
+             patch("strategies.trailing_stop.save_state") as mock_save:
+            from strategies.trailing_stop import check_and_update
+            check_and_update()
+        saved = mock_save.call_args[0][0]
+        assert saved.get("stopped_out", {}).get("MSFT") is None

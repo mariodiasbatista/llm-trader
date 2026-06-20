@@ -453,7 +453,14 @@ class TestSchedulerTlogLevelVisibility:
         """'Trailing stop check...' reaches Telegram when log level is 2 (info)."""
         import core.notifier as notifier
         notifier._telegram_log_level = 2
-        mock_check.return_value = {"checked": [], "stopped_out": [], "laddered": []}
+        # Return one checked position so the tlog gate (checked > 0) fires
+        mock_check.return_value = {
+            "checked": [{"symbol": "AAPL", "price": 200.0, "floor": 180.0,
+                         "hwm": 210.0, "gap_pct": 10.0, "entry": 190.0,
+                         "qty": 10.0, "gain_pct": 0.05, "profit_stop_active": True}],
+            "stopped_out": [],
+            "laddered": [],
+        }
 
         from scheduler.market_scheduler import _run_trailing_stop
         _run_trailing_stop()
@@ -1074,3 +1081,156 @@ class TestPublishedDateStalenessFilter:
         }
         mock_rec = self._run([sig])
         mock_rec.assert_called_once()
+
+
+# ── 12. Stop-out cooldown ─────────────────────────────────────────────────────
+
+class TestStopOutCooldown:
+    """Signals for recently stopped-out tickers must be skipped for cooldown_days."""
+
+    def _signal(self, ticker="MSFT"):
+        return {
+            "txDate": _d(1),
+            "publishedDate": _d(0),
+            "txType": "purchase",
+            "size": "$100,001 - $250,000",
+            "asset": {"ticker": ticker},
+            "politician": {"name": "Josh Gottheimer", "id": "P099"},
+        }
+
+    def _skip_rec(self):
+        return {
+            "strategy": "SKIP", "confidence": 0, "reasoning": "test",
+            "suggested_position_size_pct": 0.0, "key_risk": "",
+            "_cache_hit": False, "_tokens_saved": 0,
+        }
+
+    def _run(self, signals, stopped_out_dates, cooldown_days=5):
+        mod = _load_analyze_module()
+        acct = MagicMock()
+        acct.buying_power = 50_000.0
+        import json
+        settings = {
+            "analyze": {"size_up": False, "stop_cooldown_days": cooldown_days},
+            "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {},
+        }
+        state = {
+            "positions": {}, "wheel": {}, "copied_trades": [],
+            "pending_trades": {}, "stopped_out": stopped_out_dates,
+        }
+        with patch.object(mod, "get_account", return_value=acct), \
+             patch.object(mod, "get_positions", return_value=[]), \
+             patch.object(mod, "get_latest_price", return_value=400.0), \
+             patch.object(mod, "fetch_large_trades", return_value=signals), \
+             patch.object(mod, "get_recommendation", return_value=self._skip_rec()) as mock_rec, \
+             patch.object(mod, "load_state", return_value=state), \
+             patch.object(mod, "save_state"), \
+             patch.object(mod, "state_lock", _noop_lock), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(settings)), \
+             patch("sys.argv", ["analyze_and_trade.py"]):
+            mod.main()
+        return mock_rec
+
+    def test_ticker_in_cooldown_never_reaches_claude(self):
+        """Signal for a ticker stopped 2 days ago is skipped during 5-day cooldown."""
+        mock_rec = self._run([self._signal("MSFT")], {"MSFT": _d(2)})
+        mock_rec.assert_not_called()
+
+    def test_expired_cooldown_reaches_claude(self):
+        """Signal for a ticker stopped 6 days ago passes after the 5-day cooldown."""
+        mock_rec = self._run([self._signal("MSFT")], {"MSFT": _d(6)})
+        mock_rec.assert_called_once()
+
+    def test_ticker_not_in_stopped_out_reaches_claude(self):
+        """Signal for a ticker with no stop-out history always reaches Claude."""
+        mock_rec = self._run([self._signal("NVDA")], {})
+        mock_rec.assert_called_once()
+
+    def test_cooldown_ticker_blocked_while_other_ticker_passes(self):
+        """Cooldown blocks only the stopped ticker; a different ticker still reaches Claude."""
+        signals = [self._signal("MSFT"), self._signal("DDOG")]
+        mock_rec = self._run(signals, {"MSFT": _d(2)})
+        called_tickers = [call[0][0].get("asset", {}).get("ticker") for call in mock_rec.call_args_list]
+        assert "MSFT" not in called_tickers
+        assert "DDOG" in called_tickers
+
+    def test_zero_cooldown_days_disables_cooldown(self):
+        """stop_cooldown_days=0 means cooldown is off; even a just-stopped ticker reaches Claude."""
+        mock_rec = self._run([self._signal("MSFT")], {"MSFT": _d(0)}, cooldown_days=0)
+        mock_rec.assert_called_once()
+
+
+# ── 13. txDate freshness filter ───────────────────────────────────────────────
+
+class TestTxDateFreshnessFilter:
+    """Signals where the underlying trade (txDate) is too old must be rejected before Claude."""
+
+    def _signal(self, ticker="NVDA", tx_days_ago=5, pub_days_ago=1, pol_id="P001"):
+        return {
+            "txDate": _d(tx_days_ago),
+            "publishedDate": _d(pub_days_ago),
+            "txType": "purchase",
+            "size": "$50,001 - $100,000",
+            "asset": {"ticker": ticker},
+            "politician": {"name": "Maria Salazar", "id": pol_id},
+        }
+
+    def _skip_rec(self):
+        return {
+            "strategy": "SKIP", "confidence": 0, "reasoning": "test",
+            "suggested_position_size_pct": 0.0, "key_risk": "",
+            "_cache_hit": False, "_tokens_saved": 0,
+        }
+
+    def _run(self, signals, max_txdate_age_days=14):
+        mod = _load_analyze_module()
+        acct = MagicMock()
+        acct.buying_power = 50_000.0
+        import json
+        settings = {
+            "analyze": {"size_up": False, "max_txdate_age_days": max_txdate_age_days},
+            "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {},
+        }
+        state = {"positions": {}, "wheel": {}, "copied_trades": [], "pending_trades": {}, "stopped_out": {}}
+        with patch.object(mod, "get_account", return_value=acct), \
+             patch.object(mod, "get_positions", return_value=[]), \
+             patch.object(mod, "get_latest_price", return_value=200.0), \
+             patch.object(mod, "fetch_large_trades", return_value=signals), \
+             patch.object(mod, "get_recommendation", return_value=self._skip_rec()) as mock_rec, \
+             patch.object(mod, "load_state", return_value=state), \
+             patch.object(mod, "save_state"), \
+             patch.object(mod, "state_lock", _noop_lock), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(settings)), \
+             patch("sys.argv", ["analyze_and_trade.py"]):
+            mod.main()
+        return mock_rec
+
+    def test_fresh_txdate_reaches_claude(self):
+        """txDate=5d ago within 14-day window → Claude is called."""
+        mock_rec = self._run([self._signal(tx_days_ago=5)])
+        mock_rec.assert_called_once()
+
+    def test_stale_txdate_is_filtered_even_with_fresh_publisheddate(self):
+        """txDate=20d ago but publishedDate=today → late filer, rejected before Claude."""
+        mock_rec = self._run([self._signal(tx_days_ago=20, pub_days_ago=0)])
+        mock_rec.assert_not_called()
+
+    def test_txdate_exactly_at_limit_reaches_claude(self):
+        """txDate exactly at the age limit (14d) is still accepted."""
+        mock_rec = self._run([self._signal(tx_days_ago=14)])
+        mock_rec.assert_called_once()
+
+    def test_txdate_one_day_over_limit_is_filtered(self):
+        """txDate one day beyond the limit (15d with max=14) is rejected."""
+        mock_rec = self._run([self._signal(tx_days_ago=15)])
+        mock_rec.assert_not_called()
+
+    def test_zero_max_txdate_age_disables_filter(self):
+        """max_txdate_age_days=0 disables the filter; any txDate reaches Claude."""
+        mock_rec = self._run([self._signal(tx_days_ago=100)], max_txdate_age_days=0)
+        mock_rec.assert_called_once()
+
+    def test_483_day_old_late_filer_is_rejected(self):
+        """Real-world case: 483-day-old trade just filed today is filtered out."""
+        mock_rec = self._run([self._signal(tx_days_ago=483, pub_days_ago=0)])
+        mock_rec.assert_not_called()
