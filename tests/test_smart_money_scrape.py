@@ -57,10 +57,14 @@ class TestParseScrapDate:
         assert _parse_scrape_date("09:30", "YESTERDAY") == (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
+def _days_ago(n: int) -> str:
+    return (datetime.now() - timedelta(days=n)).strftime("%Y-%m-%d")
+
+
 SCRAPE_TRADES = [
     {
-        "txDate": "2026-03-24",
-        "publishedDate": "2026-04-22",
+        "txDate": _days_ago(5),
+        "publishedDate": _days_ago(2),
         "txType": "buy",
         "size": "$15,001 - $50,000",
         "price": "348.43",
@@ -68,8 +72,8 @@ SCRAPE_TRADES = [
         "asset": {"ticker": "AMGN", "assetName": "Amgen Inc", "assetType": "stock"},
     },
     {
-        "txDate": "2026-03-19",
-        "publishedDate": "2026-04-22",
+        "txDate": _days_ago(7),
+        "publishedDate": _days_ago(3),
         "txType": "buy",
         "size": "$1,001 - $15,000",
         "price": "185.20",

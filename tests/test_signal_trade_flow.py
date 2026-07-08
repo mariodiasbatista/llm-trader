@@ -646,14 +646,16 @@ class TestSkipSignalMarkedAsProcessed:
             mod.main()
         return mock_save, mock_rec
 
-    def test_skip_trade_key_saved_to_copied_trades(self):
-        """After SKIP, the trade_key must appear in saved copied_trades."""
+    def test_skip_trade_key_not_saved_to_copied_trades(self):
+        """After SKIP, the trade_key must NOT be persisted — signal re-evaluates next cycle."""
         mock_save, _ = self._run_main([self._signal()], self._skip_rec())
-        saved = mock_save.call_args[0][0]
-        assert f"{_d(1)}_ALH_P001" in saved["copied_trades"]
+        # save_state is not called at all on a pure SKIP run (no _mark_processed)
+        if mock_save.call_args is not None:
+            saved = mock_save.call_args[0][0]
+            assert f"{_d(1)}_ALH_P001" not in saved["copied_trades"]
 
     def test_already_processed_skip_does_not_call_claude(self):
-        """If a SKIP trade_key is already in copied_trades, Claude is never called again."""
+        """If a trade_key is already in copied_trades (from a past execution), Claude is never called again."""
         _, mock_rec = self._run_main(
             [self._signal()], self._skip_rec(),
             initial_copied=[f"{_d(1)}_ALH_P001"],
@@ -887,8 +889,8 @@ class TestMarkProcessedPersistsImmediately:
             "politician": {"name": "Michael McCaul", "id": pol_id},
         }
 
-    def test_skip_signal_saved_before_next_signal_processed(self):
-        """SKIP trade_key is in copied_trades after the first signal — not deferred to end."""
+    def test_skip_signal_not_persisted_so_claude_re_evaluates_next_cycle(self):
+        """SKIP trade_key must NOT be in copied_trades — next cycle Claude gets a fresh look."""
         saved_states = []
 
         def capture_save(state):
@@ -922,8 +924,8 @@ class TestMarkProcessedPersistsImmediately:
              patch("sys.argv", ["analyze_and_trade.py"]):
             mod.main()
 
-        # save_state was called and OMF key was persisted
-        assert any("_OMF_M001" in k for saved in saved_states for k in saved)
+        # OMF key must NOT appear in any saved state — SKIP is not persisted
+        assert not any("_OMF_M001" in k for saved in saved_states for k in saved)
 
 
 # ── 10. Intra-run deduplication (seen_this_run) ───────────────────────────────

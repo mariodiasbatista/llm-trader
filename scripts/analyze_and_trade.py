@@ -132,23 +132,22 @@ def main():
                 _mark_processed(trade_key)
                 continue
 
-        # Cooldown: skip tickers recently stopped out
+        # Cooldown: skip tickers recently stopped out — do NOT mark processed so
+        # the signal is re-evaluated once the cooldown expires.
         if stop_cooldown_days > 0 and ticker in stopped_out_dates:
             days_since_stop = _days_since(stopped_out_dates[ticker])
             if days_since_stop < stop_cooldown_days:
                 log.info(f"[{ticker}] Cooldown active — stopped {days_since_stop}d ago, skipping for {stop_cooldown_days - days_since_stop}d more")
-                _mark_processed(trade_key)
                 continue
 
-        # Position size guard
+        # Position size guard — do NOT mark processed so the signal is re-evaluated
+        # once the position is closed or changes.
         if ticker in existing_tickers:
             if not size_up:
                 log.info(f"[{ticker}] Already in portfolio — size_up=false, skipping (diversification)")
-                _mark_processed(trade_key)
                 continue
             if max_position_usd is not None and position_value.get(ticker, 0) >= max_position_usd:
                 log.info(f"[{ticker}] Position cap reached (${position_value[ticker]:,.0f} ≥ ${max_position_usd:,.0f}) — skipping")
-                _mark_processed(trade_key)
                 continue
 
         try:
@@ -200,7 +199,8 @@ def main():
         if strategy == "SKIP":
             log.info(f"[{ticker}] SKIP — {reasoning[:80]}")
             results.append(result)
-            _mark_processed(trade_key)
+            # Do NOT mark processed — re-evaluate next cycle while signal is still
+            # fresh (within publishedDate window). Only executed trades are permanent.
             continue
 
         if args.dry_run:
