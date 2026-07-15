@@ -34,6 +34,13 @@
     "min_trade_value": 15000,
     "days_lookback": 7
   },
+  "sec_insiders": {
+    "enabled": true,
+    "min_transaction_value": 100000,
+    "days_lookback": 1,
+    "max_filings": 400,
+    "require_high_conviction": true
+  },
   "analyze": {
     "size_up": false,
     "max_position_usd": 10000,
@@ -45,9 +52,9 @@
     "trailing_stop_interval_min": 5,
     "wheel_interval_min": 15,
     "analyze_interval_min": 30,
-    "analyze_days": 7,
-    "analyze_min_disclosure_value": 15000,
-    "analyze_source": "web",
+    "analyze_days": 1,
+    "analyze_min_disclosure_value": 100000,
+    "analyze_source": "sec_edgar",
     "market_open": "09:30",
     "market_close": "16:00",
     "timezone": "America/New_York",
