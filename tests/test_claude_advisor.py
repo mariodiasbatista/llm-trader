@@ -6,10 +6,17 @@ from unittest.mock import patch, MagicMock
 
 SAMPLE_TRADE = {
     "txDate": "2026-04-20",
+    "publishedDate": "2026-04-21",
     "txType": "Buy",
     "size": "$100,001 - $250,000",
-    "politician": {"name": "Michael McCaul", "id": "P001"},
-    "asset": {"ticker": "NVDA"},
+    "politician": {"name": "John Smith", "id": "CIK1234567"},
+    "asset": {"ticker": "NVDA", "assetName": "NVIDIA Corporation"},
+    "_insider_role": "Chief Executive Officer",
+    "_transaction_value": 175_000,
+    "_shares": 200,
+    "_is_director": False,
+    "_is_officer": True,
+    "_high_conviction": True,
 }
 
 SAMPLE_CONTEXT = {

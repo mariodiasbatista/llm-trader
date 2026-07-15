@@ -53,7 +53,14 @@ def _is_high_conviction(title: str) -> bool:
     if not title:
         return False
     t = title.lower()
-    return any(role in t for role in HIGH_CONVICTION_TITLES)
+    for role in HIGH_CONVICTION_TITLES:
+        if role not in t:
+            continue
+        # "president" substring would falsely match "vice president" — skip it for plain VPs
+        if role == "president" and "vice president" in t:
+            continue
+        return True
+    return False
 
 
 def _value_to_size_label(value: float) -> str:
