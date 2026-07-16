@@ -73,6 +73,12 @@ class TestAlpacaConnection:
         assert portfolio_value > 0
 
 
+@pytest.mark.skip(
+    reason="Capitol Trades is legacy (superseded by SEC EDGAR in ac44d0e) — its API is "
+           "unreliable, forcing every call through a ~1min Playwright scrape fallback, "
+           "4x per run with no caching. Re-enable if smart_money.py's Capitol Trades path "
+           "becomes load-bearing again."
+)
 @needs_creds
 class TestCapitolTradesAPI:
     def test_fetch_returns_list(self):

@@ -1051,8 +1051,8 @@ class TestPublishedDateStalenessFilter:
         mock_rec.assert_called_once()
 
     def test_old_publisheddate_is_filtered_regardless_of_txdate(self):
-        """publishedDate=10d ago → exceeds 7-day window, Claude is never called."""
-        mock_rec = self._run([self._signal(tx_days_ago=3, pub_days_ago=10)])
+        """publishedDate=11d ago → exceeds the 7-day window + 3-day filing-lag grace, Claude is never called."""
+        mock_rec = self._run([self._signal(tx_days_ago=3, pub_days_ago=11)])
         mock_rec.assert_not_called()
 
     def test_fresh_publisheddate_on_day_of_publication_reaches_claude(self):
@@ -1061,9 +1061,9 @@ class TestPublishedDateStalenessFilter:
         mock_rec.assert_called_once()
 
     def test_signal_without_publisheddate_falls_back_to_txdate(self):
-        """No publishedDate field → falls back to txDate; old txDate gets filtered."""
+        """No publishedDate field → falls back to txDate; old txDate (beyond the +3 grace) gets filtered."""
         sig = {
-            "txDate": _d(10),
+            "txDate": _d(11),
             "txType": "purchase",
             "size": "$15,001 - $50,000",
             "asset": {"ticker": "HD"},
