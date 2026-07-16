@@ -54,8 +54,13 @@ def start_wheel(symbol: str, contracts: int = 1) -> dict:
     if premium <= 0:
         log.warning(f"[{symbol}] Put premium is zero — quote unavailable for {option_sym}, skipping")
         return {}
-    submit_option_order(option_sym, contracts, OrderSide.SELL)
-    log_trade("SELL_PUT", symbol, contracts, premium, f"option={option_sym} strike={put_strike}")
+    order = submit_option_order(option_sym, contracts, OrderSide.SELL)
+    fill_price = float(order.filled_avg_price) if order.filled_avg_price is not None else premium
+    log_trade(
+        "SELL_PUT", symbol, contracts, fill_price,
+        f"option={option_sym} strike={put_strike}"
+        + ("" if order.filled_avg_price is not None else " unconfirmed_fill=true")
+    )
 
     with state_lock():
         state = load_state()
@@ -110,8 +115,13 @@ def check_and_manage() -> dict:
                         if call_premium <= 0:
                             log.warning(f"[{symbol}] Call premium is zero — quote unavailable for {option_sym}, skipping")
                         else:
-                            submit_option_order(option_sym, contracts, OrderSide.SELL)
-                            log_trade("SELL_CALL", symbol, contracts, call_premium, f"option={option_sym} strike={call_strike}")
+                            call_order = submit_option_order(option_sym, contracts, OrderSide.SELL)
+                            call_fill_price = float(call_order.filled_avg_price) if call_order.filled_avg_price is not None else call_premium
+                            log_trade(
+                                "SELL_CALL", symbol, contracts, call_fill_price,
+                                f"option={option_sym} strike={call_strike}"
+                                + ("" if call_order.filled_avg_price is not None else " unconfirmed_fill=true")
+                            )
                             ws["stage"] = 2
                             ws["call_strike"] = call_strike
                             ws["option_symbol"] = option_sym
@@ -134,8 +144,13 @@ def check_and_manage() -> dict:
                         if put_premium <= 0:
                             log.warning(f"[{symbol}] Put premium is zero — quote unavailable for {option_sym}, skipping")
                         else:
-                            submit_option_order(option_sym, contracts, OrderSide.SELL)
-                            log_trade("SELL_PUT", symbol, contracts, put_premium, f"option={option_sym} strike={put_strike}")
+                            put_order = submit_option_order(option_sym, contracts, OrderSide.SELL)
+                            put_fill_price = float(put_order.filled_avg_price) if put_order.filled_avg_price is not None else put_premium
+                            log_trade(
+                                "SELL_PUT", symbol, contracts, put_fill_price,
+                                f"option={option_sym} strike={put_strike}"
+                                + ("" if put_order.filled_avg_price is not None else " unconfirmed_fill=true")
+                            )
                             ws["stage"] = 1
                             ws["put_strike"] = put_strike
                             ws["option_symbol"] = option_sym

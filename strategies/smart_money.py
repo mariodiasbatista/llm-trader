@@ -389,14 +389,16 @@ def check_and_copy() -> dict:
                     cost = shares * price
                     if buying_power < cost:
                         continue
-                    market_buy(ticker, shares)
+                    order = market_buy(ticker, shares)
+                    fill_price = float(order.filled_avg_price) if order.filled_avg_price is not None else price
                     log_trade(
-                        "SMART_BUY", ticker, shares, price,
+                        "SMART_BUY", ticker, shares, fill_price,
                         f"copying {trade.get('politician', {}).get('name', 'unknown')}"
+                        + ("" if order.filled_avg_price is not None else " unconfirmed_fill=true")
                     )
                     state.setdefault("copied_trades", []).append(trade_key)
                     buying_power -= cost
-                    actions.append(f"Copied: {shares} {ticker} @ ${price:.2f}")
+                    actions.append(f"Copied: {shares} {ticker} @ ${fill_price:.2f}")
                 except Exception as e:
                     log.error(f"Failed to copy {ticker}: {e}")
 

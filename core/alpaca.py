@@ -95,6 +95,23 @@ def _order_id(label: str) -> str:
     return f"llmTrader-{label}-{uuid.uuid4().hex[:8]}"
 
 
+def _wait_for_fill(order, timeout: float = 15.0, interval: float = 1.0):
+    """Poll until the order fills or the timeout elapses.
+
+    Market orders placed during regular trading hours typically fill within
+    a few seconds; outside market hours they sit as "accepted" until the
+    next open, so the timeout is expected to be hit in that case — callers
+    must check order.filled_avg_price is not None before trusting the fill.
+    """
+    import time
+    client = _trading_client()
+    deadline = time.monotonic() + timeout
+    while order.filled_avg_price is None and time.monotonic() < deadline:
+        time.sleep(interval)
+        order = client.get_order_by_id(order.id)
+    return order
+
+
 def market_buy(symbol: str, qty: float):
     _debug(f"[alpaca] market_buy {symbol} x{qty}")
     order = MarketOrderRequest(
@@ -104,8 +121,8 @@ def market_buy(symbol: str, qty: float):
         time_in_force=TimeInForce.DAY,
         client_order_id=_order_id(f"buy-{symbol}"),
     )
-    result = _trading_client().submit_order(order)
-    _debug(f"[alpaca] order submitted id={result.id} status={result.status}")
+    result = _wait_for_fill(_trading_client().submit_order(order))
+    _debug(f"[alpaca] order submitted id={result.id} status={result.status} filled_avg_price={result.filled_avg_price}")
     return result
 
 
@@ -118,14 +135,14 @@ def market_sell(symbol: str, qty: float):
         time_in_force=TimeInForce.DAY,
         client_order_id=_order_id(f"sell-{symbol}"),
     )
-    result = _trading_client().submit_order(order)
-    _debug(f"[alpaca] order submitted id={result.id} status={result.status}")
+    result = _wait_for_fill(_trading_client().submit_order(order))
+    _debug(f"[alpaca] order submitted id={result.id} status={result.status} filled_avg_price={result.filled_avg_price}")
     return result
 
 
 def close_position(symbol: str):
     """Sell entire position at market."""
-    return _trading_client().close_position(symbol)
+    return _wait_for_fill(_trading_client().close_position(symbol))
 
 
 def trailing_stop_sell(symbol: str, qty: float, trail_percent: float):
@@ -168,7 +185,9 @@ def submit_option_order(option_symbol: str, qty: int, side: OrderSide):
         time_in_force=TimeInForce.DAY,
         client_order_id=_order_id(f"opt-{side_label}-{option_symbol[:6]}"),
     )
-    return _trading_client().submit_order(order)
+    result = _wait_for_fill(_trading_client().submit_order(order))
+    _debug(f"[alpaca] option order submitted id={result.id} status={result.status} filled_avg_price={result.filled_avg_price}")
+    return result
 
 
 def get_option_mid_price(option_symbol: str) -> float:

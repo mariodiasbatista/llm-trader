@@ -232,24 +232,27 @@ def main():
 
         try:
             if strategy == "TRAILING_STOP":
-                market_buy(ticker, shares_to_buy)
+                order = market_buy(ticker, shares_to_buy)
+                fill_price = float(order.filled_avg_price) if order.filled_avg_price is not None else price
+                unconfirmed_note = "" if order.filled_avg_price is not None else " unconfirmed_fill=true"
                 stop_note = ""
                 if args.stop_floor is not None:
                     trailing_stop_sell(ticker, shares_to_buy, args.stop_floor)
                     stop_note = f" + native trailing stop {args.stop_floor}%"
                 log_trade(
-                    "AI_BUY_TRAILING", ticker, shares_to_buy, price,
+                    "AI_BUY_TRAILING", ticker, shares_to_buy, fill_price,
                     f"strategy=TRAILING_STOP confidence={confidence}% "
                     f"insider={insider_name} role={insider_role} "
                     f"value=${tx_value:,.0f} reasoning={reasoning[:60]}"
                     + (f" stop_floor={args.stop_floor}%" if args.stop_floor else "")
+                    + unconfirmed_note
                 )
                 buying_power -= cost
                 result.update({"executed": True, "shares": shares_to_buy})
-                print(f"  EXECUTED   : Bought {shares_to_buy} shares @ ${price:.2f}{stop_note}")
+                print(f"  EXECUTED   : Bought {shares_to_buy} shares @ ${fill_price:.2f}{stop_note}")
                 if telegram_configured():
                     send_message(
-                        f"✅ *Bought* `{ticker}` — {shares_to_buy} shares @ ${price:.2f}{escape_md(stop_note)}\n"
+                        f"✅ *Bought* `{ticker}` — {shares_to_buy} shares @ ${fill_price:.2f}{escape_md(stop_note)}\n"
                         f"Strategy: `TRAILING_STOP` ({confidence}%) | {escape_md(insider_name)} ({escape_md(insider_role)})"
                     )
 

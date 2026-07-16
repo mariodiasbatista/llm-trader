@@ -154,17 +154,19 @@ def _poll_telegram():
 
                 if strategy == "TRAILING_STOP":
                     from core.alpaca import trailing_stop_sell
-                    market_buy(ticker, shares)
+                    order = market_buy(ticker, shares)
+                    fill_price = float(order.filled_avg_price) if order.filled_avg_price is not None else price
                     if stop_floor is not None:
                         trailing_stop_sell(ticker, shares, stop_floor)
                     log_trade(
-                        "AI_BUY_TRAILING", ticker, shares, price,
+                        "AI_BUY_TRAILING", ticker, shares, fill_price,
                         f"strategy=TRAILING_STOP approved_via=telegram"
                         + (f" stop_floor={stop_floor}%" if stop_floor else "")
+                        + ("" if order.filled_avg_price is not None else " unconfirmed_fill=true")
                     )
                     buying_power -= cost
                     state.setdefault("copied_trades", []).append(trade_key)
-                    send_message(f"✅ *Bought* `{ticker}` — {shares} shares @ ${price:.2f}")
+                    send_message(f"✅ *Bought* `{ticker}` — {shares} shares @ ${fill_price:.2f}")
                     tlog(f"[{ticker}] Telegram-approved TRAILING_STOP executed", 2)
 
                 elif strategy == "WHEEL":

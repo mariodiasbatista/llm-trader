@@ -115,8 +115,13 @@ def check_and_update() -> dict:
             if take_profit_pct > 0 and gain_pct >= take_profit_pct:
                 log.info(f"[{symbol}] TAKE PROFIT @ ${price:.2f} (+{gain_pct:.1%} from entry ${entry:.2f})")
                 try:
-                    close_position(symbol)
-                    log_trade("TAKE_PROFIT", symbol, qty, price, f"gain={gain_pct:.1%} target={take_profit_pct:.0%}")
+                    close_order = close_position(symbol)
+                    fill_price = float(close_order.filled_avg_price) if close_order.filled_avg_price is not None else price
+                    log_trade(
+                        "TAKE_PROFIT", symbol, qty, fill_price,
+                        f"gain={gain_pct:.1%} target={take_profit_pct:.0%}"
+                        + ("" if close_order.filled_avg_price is not None else " unconfirmed_fill=true")
+                    )
                     summary["stopped_out"].append(symbol)
                     del state["positions"][symbol]
                     continue
@@ -127,8 +132,13 @@ def check_and_update() -> dict:
             if ps.get("profit_stop_active") and price <= ps["stop_floor"]:
                 log.warning(f"[{symbol}] STOP TRIGGERED @ ${price:.2f} (floor ${ps['stop_floor']:.2f})")
                 try:
-                    close_position(symbol)
-                    log_trade("STOP_SELL", symbol, qty, price, f"floor={ps['stop_floor']:.2f}")
+                    close_order = close_position(symbol)
+                    fill_price = float(close_order.filled_avg_price) if close_order.filled_avg_price is not None else price
+                    log_trade(
+                        "STOP_SELL", symbol, qty, fill_price,
+                        f"floor={ps['stop_floor']:.2f}"
+                        + ("" if close_order.filled_avg_price is not None else " unconfirmed_fill=true")
+                    )
                     summary["stopped_out"].append(symbol)
                     del state["positions"][symbol]
                     state.setdefault("stopped_out", {})[symbol] = datetime.now().strftime("%Y-%m-%d")
@@ -146,13 +156,15 @@ def check_and_update() -> dict:
                         buying_power = float(acct.buying_power)
                         cost = price * rung["shares"]
                         if buying_power >= cost:
-                            market_buy(symbol, rung["shares"])
+                            order = market_buy(symbol, rung["shares"])
+                            fill_price = float(order.filled_avg_price) if order.filled_avg_price is not None else price
                             log_trade(
-                                "LADDER_BUY", symbol, rung["shares"], price,
+                                "LADDER_BUY", symbol, rung["shares"], fill_price,
                                 f"drop={drop_from_entry:.1%} rung={rung['drop_pct']:.0%}"
+                                + ("" if order.filled_avg_price is not None else " unconfirmed_fill=true")
                             )
                             ps["ladder_triggered"].append(key)
-                            summary["laddered"].append({"symbol": symbol, "qty": rung["shares"], "price": price})
+                            summary["laddered"].append({"symbol": symbol, "qty": rung["shares"], "price": fill_price})
                         else:
                             log.warning(f"[{symbol}] Ladder buy skipped — insufficient buying power (${buying_power:.0f} < ${cost:.0f})")
                             if telegram_configured():

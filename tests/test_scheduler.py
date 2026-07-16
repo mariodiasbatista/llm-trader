@@ -621,79 +621,68 @@ class TestStart:
 class TestCheckDataSource:
     @patch("core.notifier.send_message")
     @patch("core.notifier.is_configured", return_value=True)
-    @patch("strategies.smart_money._fetch_raw")
-    @patch("strategies.smart_money._fetch_raw_scrape")
-    def test_no_alert_when_both_return_data(self, mock_scrape, mock_api, _cfg, mock_send):
-        """No Telegram alert when scrape and API both return rows."""
+    @patch("requests.get")
+    def test_no_alert_when_edgar_returns_200(self, mock_get, _cfg, mock_send):
+        """No Telegram alert when SEC EDGAR responds 200, at info log level."""
         import core.notifier as notifier
         notifier._telegram_log_level = 2
-        mock_scrape.return_value = [{"ticker": "AAPL"}]
-        mock_api.return_value = [{"ticker": "AAPL"}]
+        mock_get.return_value = MagicMock(status_code=200)
         from scheduler.market_scheduler import _check_data_source
         _check_data_source()
         sent = [c[0][0] for c in mock_send.call_args_list]
-        assert not any("FAILED" in t for t in sent)
+        assert not any("SEC EDGAR" in t for t in sent)
 
     @patch("core.notifier.send_message")
     @patch("core.notifier.is_configured", return_value=True)
-    @patch("strategies.smart_money._fetch_raw")
-    @patch("strategies.smart_money._fetch_raw_scrape")
-    def test_alert_when_scrape_returns_empty(self, mock_scrape, mock_api, _cfg, mock_send):
-        """Telegram alert sent when web scrape returns 0 rows."""
+    @patch("requests.get")
+    def test_alert_when_edgar_returns_non_200(self, mock_get, _cfg, mock_send):
+        """Telegram alert sent when SEC EDGAR responds with a non-200 status."""
         import core.notifier as notifier
         notifier._telegram_log_level = 2
-        mock_scrape.return_value = []
-        mock_api.return_value = [{"ticker": "AAPL"}]
+        mock_get.return_value = MagicMock(status_code=503)
         from scheduler.market_scheduler import _check_data_source
         _check_data_source()
         sent = [c[0][0] for c in mock_send.call_args_list]
-        assert any("FAILED" in t and "web scrape" in t for t in sent)
+        assert any("SEC EDGAR" in t and "503" in t for t in sent)
 
     @patch("core.notifier.send_message")
     @patch("core.notifier.is_configured", return_value=True)
-    @patch("strategies.smart_money._fetch_raw")
-    @patch("strategies.smart_money._fetch_raw_scrape")
-    def test_alert_when_scrape_raises(self, mock_scrape, mock_api, _cfg, mock_send):
-        """Telegram alert sent when web scrape raises an exception."""
+    @patch("requests.get")
+    def test_alert_when_edgar_request_raises(self, mock_get, _cfg, mock_send):
+        """Telegram alert sent when the SEC EDGAR request raises an exception."""
         import core.notifier as notifier
         notifier._telegram_log_level = 2
-        mock_scrape.side_effect = Exception("Connection refused")
-        mock_api.return_value = [{"ticker": "AAPL"}]
+        mock_get.side_effect = Exception("Connection refused")
         from scheduler.market_scheduler import _check_data_source
         _check_data_source()
         sent = [c[0][0] for c in mock_send.call_args_list]
-        assert any("FAILED" in t for t in sent)
+        assert any("SEC EDGAR" in t for t in sent)
 
     @patch("core.notifier.send_message")
     @patch("core.notifier.is_configured", return_value=True)
-    @patch("strategies.smart_money._fetch_raw")
-    @patch("strategies.smart_money._fetch_raw_scrape")
-    def test_api_only_failure_is_debug_level(self, mock_scrape, mock_api, _cfg, mock_send):
-        """API-only failure is severity 1 (debug) — not sent at log level 2 since scraper covers it."""
+    @patch("requests.get")
+    def test_ok_status_not_sent_at_info_level(self, mock_get, _cfg, mock_send):
+        """A healthy check is severity 1 (debug) — not forwarded at log level 2."""
         import core.notifier as notifier
         notifier._telegram_log_level = 2  # info — debug messages suppressed
-        mock_scrape.return_value = [{"ticker": "AAPL"}]
-        mock_api.return_value = []
+        mock_get.return_value = MagicMock(status_code=200)
         from scheduler.market_scheduler import _check_data_source
         _check_data_source()
-        # At level 2, a severity-1 message is NOT forwarded to Telegram
         sent = [c[0][0] for c in mock_send.call_args_list]
-        assert not any("FAILED" in t for t in sent)
+        assert not any("SEC EDGAR" in t for t in sent)
 
     @patch("core.notifier.send_message")
     @patch("core.notifier.is_configured", return_value=True)
-    @patch("strategies.smart_money._fetch_raw")
-    @patch("strategies.smart_money._fetch_raw_scrape")
-    def test_api_only_failure_visible_at_debug_level(self, mock_scrape, mock_api, _cfg, mock_send):
-        """API-only failure IS visible when log level is 1 (debug)."""
+    @patch("requests.get")
+    def test_ok_status_visible_at_debug_level(self, mock_get, _cfg, mock_send):
+        """A healthy check IS visible when log level is 1 (debug)."""
         import core.notifier as notifier
         notifier._telegram_log_level = 1
-        mock_scrape.return_value = [{"ticker": "AAPL"}]
-        mock_api.return_value = []
+        mock_get.return_value = MagicMock(status_code=200)
         from scheduler.market_scheduler import _check_data_source
         _check_data_source()
         sent = [c[0][0] for c in mock_send.call_args_list]
-        assert any("FAILED" in t and "API" in t for t in sent)
+        assert any("SEC EDGAR" in t and "OK" in t for t in sent)
         notifier._telegram_log_level = 2
 
 
@@ -840,25 +829,6 @@ class TestTodaysActivity:
             assert cum["losses"] == 0
         finally:
             logger_mod.TRADE_LOG = original
-
-
-# ── _check_data_source — API exception path ──────────────────────────────────
-
-class TestCheckDataSourceApiException:
-    @patch("core.notifier.send_message")
-    @patch("core.notifier.is_configured", return_value=True)
-    @patch("strategies.smart_money._fetch_raw", side_effect=Exception("timeout"))
-    @patch("strategies.smart_money._fetch_raw_scrape")
-    def test_api_exception_logged_at_debug(self, mock_scrape, mock_api, _cfg, mock_send):
-        """API exception is captured and reported at severity 1 when scraper is OK."""
-        import core.notifier as notifier
-        notifier._telegram_log_level = 1
-        mock_scrape.return_value = [{"ticker": "AAPL"}]
-        from scheduler.market_scheduler import _check_data_source
-        _check_data_source()
-        sent = [c[0][0] for c in mock_send.call_args_list]
-        assert any("FAILED" in t and "API" in t for t in sent)
-        notifier._telegram_log_level = 2
 
 
 # ── _enforce_single_instance — stale PID path ────────────────────────────────
