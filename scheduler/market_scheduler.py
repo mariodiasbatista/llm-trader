@@ -79,16 +79,14 @@ def _run_analyze():
     if not is_market_open():
         return
     cfg = _settings()
-    days = cfg.get("analyze_days", 2)
-    min_val = cfg.get("analyze_min_disclosure_value", 15000)
-    source = cfg.get("analyze_source", "web")
-    tlog(f"AI analyze run (days={days} min_val=${min_val:,} source={source})...", 2)
+    days = cfg.get("analyze_days", 1)
+    min_val = cfg.get("analyze_min_disclosure_value", 100_000)
+    tlog(f"AI analyze run (days={days} min_val=${min_val:,} source=sec_edgar)...", 2)
     cmd = [
         sys.executable,
         str(BASE / "scripts" / "analyze_and_trade.py"),
         "--days", str(days),
-        "--min-disclosure-value", str(min_val),
-        "--source", source,
+        "--min-value", str(min_val),
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
@@ -415,40 +413,22 @@ def _send_schedule() -> None:
 
 
 def _check_data_source():
-    """Health-check Capitol Trades every 60 min.
-
-    Severity rules:
-    - Both sources fail  → severity 3 (error) — always visible, trading is blind
-    - Only API fails     → severity 1 (debug) — scraper covers it, low noise
-    - Both OK            → severity 1 (debug) — silent unless debug mode
-    """
-    from strategies.smart_money import _fetch_raw_scrape, _fetch_raw
-    scrape_issues, api_issues = [], []
-
+    """Health-check SEC EDGAR connectivity every 60 min."""
+    import requests
     try:
-        rows = _fetch_raw_scrape(page=1)
-        if not rows:
-            scrape_issues.append("web scrape returned 0 rows — HTML structure may have changed")
+        r = requests.get(
+            "https://efts.sec.gov/LATEST/search-index",
+            params={"forms": "4", "dateRange": "custom",
+                    "startdt": "2026-01-01", "enddt": "2026-01-02", "from": 0, "size": 1},
+            headers={"User-Agent": "llmTrader/1.0 mario.dias.batista@gmail.com"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            tlog("Data source check: SEC EDGAR OK", 1)
         else:
-            tlog(f"Data source check: web scrape OK ({len(rows)} rows)", 1)
+            tlog(f"⚠️ SEC EDGAR health check returned HTTP {r.status_code}", 3)
     except Exception as e:
-        scrape_issues.append(f"web scrape raised exception: {escape_md(str(e))}")
-
-    try:
-        rows = _fetch_raw(source="api", max_pages=1)
-        if not rows:
-            api_issues.append("API returned 0 rows")
-        else:
-            tlog(f"Data source check: API OK ({len(rows)} rows)", 1)
-    except Exception as e:
-        api_issues.append(f"API raised exception: {escape_md(str(e))}")
-
-    all_issues = scrape_issues + api_issues
-    if all_issues:
-        # Critical only when BOTH fail — scraper alone failing means we're trading blind
-        severity = 3 if scrape_issues else 1
-        msg = "⚠️ *Capitol Trades health check FAILED*\n" + "\n".join(f"• {i}" for i in all_issues)
-        tlog(msg, severity)
+        tlog(f"⚠️ SEC EDGAR health check failed: {escape_md(str(e))}", 3)
 
 
 _PID_FILE = BASE / "logs" / "scheduler.pid"
