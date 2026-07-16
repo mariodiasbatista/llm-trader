@@ -4,7 +4,7 @@ An AI-powered trading bot connecting **Claude Opus 4.7** to **Alpaca Markets** f
 
 ## How It Works
 
-1. **Signal Source** — Fetches US politician stock disclosure filings from [Capitol Trades](https://capitoltrades.com) (free public API, no key needed). Filters by trade size ≥ $50K to capture significant, high-conviction moves — independent of which politician made them.
+1. **Signal Source** — Fetches [SEC EDGAR Form 4](https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany) filings: open-market stock purchases by corporate insiders (CEOs, CFOs, directors, and other officers). Insiders must file within 2 business days of the trade, so signals are near-real-time — a big upgrade over the 31–45 day publication lag of politician disclosure trackers. Filters by transaction value (≥ $100K default) and high-conviction roles.
 
 2. **AI Decision** — Claude Opus 4.7 analyzes each signal and decides:
    - `TRAILING_STOP` — buy shares + protect with a trailing stop floor (for momentum stocks: tech, semiconductors, defense)
@@ -35,14 +35,14 @@ python main.py status
 ## Usage
 
 ```bash
-# AI full pipeline: Capitol Trades → Claude → execute
+# AI full pipeline: SEC EDGAR Form 4 → Claude → execute
 python main.py analyze
 
 # Preview Claude's decisions without trading
 python main.py analyze --dry-run
 
-# Filter by politician (optional — default watches ALL $50K+ moves)
-python main.py analyze --politicians "McCaul" "Pelosi" --days 14
+# Widen the window and lower the conviction bar (optional — default is 1 day / $100K)
+python main.py analyze --days 14 --min-value 50000
 
 # Compare strategy performance over time
 python main.py performance
@@ -53,8 +53,8 @@ python main.py check
 # Manual trailing stop check cycle
 python main.py trailing
 
-# Browse raw disclosures without AI
-python main.py smart-money --buy-only
+# Browse raw Form 4 insider buy signals without AI
+python scripts/insider_report.py --days 1
 
 # Start The Wheel manually on a specific stock
 python main.py wheel AAPL --contracts 1
@@ -71,7 +71,8 @@ agents/
 strategies/
   trailing_stop.py         ← Trailing floor + laddered buys
   wheel.py                 ← Cash-secured puts → covered calls cycle
-  smart_money.py           ← Capitol Trades API (by size or by politician)
+  sec_insiders.py          ← SEC EDGAR Form 4 fetcher (primary signal source)
+  smart_money.py           ← Capitol Trades API (legacy, kept for `smart-money` command)
 core/
   alpaca.py                ← All Alpaca API calls
   logger.py                ← State + trade journal
@@ -79,16 +80,17 @@ scheduler/
   market_scheduler.py      ← NYSE-hours-only automated scheduler
 scripts/
   analyze_and_trade.py     ← Main AI pipeline
+  insider_report.py        ← Raw SEC Form 4 signal preview (no AI)
   strategy_performance.py  ← P&L comparison report
-tests/                     ← 23 unit tests (pytest)
+tests/                     ← 326 unit tests (pytest)
 config/settings.json       ← All tunable parameters
 ```
 
-## Signal Strategy: Size Over Identity
+## Signal Strategy: Conviction Over Volume
 
-The default mode (`python main.py analyze`) watches for **any** politician buying ≥ $50K — not just a pre-selected list. A $250K buy by an unknown congressman in a defense stock carries the same signal weight as a $250K buy by a famous name. Filtering by identity misses moves. Filtering by conviction size captures them.
+The default mode (`python main.py analyze`) watches for **any** corporate insider making an open-market purchase ("P" transaction code — excludes option exercises, RSU vesting, and stock plan grants) of ≥ $100K. It's restricted to high-conviction roles (CEO, CFO, COO, CTO, President, Director, Chairman, EVP/SVP, General Counsel) by default, since a $250K buy from a rank-and-file officer is noisier than the same buy from a CEO.
 
-Use `--politicians` to narrow to specific names when needed.
+Use `--all-roles` to include every insider title, and `--min-value` to adjust the conviction bar.
 
 ## Performance Tracking
 
@@ -104,7 +106,7 @@ Output: realized P&L, unrealized P&L, ROI %, and a head-to-head comparison betwe
 
 ### Trailing Stop (Phase 2)
 - Buys shares, sets a stop floor 10% below entry
-- Floor trails 5% below each new price high — locks in profits
+- Floor trails 8% below each new price high — locks in profits
 - Laddered buys: adds 10 shares at -20% drop, 20 shares at -30%
 - Auto-sells entire position if price hits the floor
 
@@ -118,13 +120,13 @@ Output: realized P&L, unrealized P&L, ROI %, and a head-to-head comparison betwe
 
 ```bash
 # Unit tests (no credentials needed)
-.venv/bin/pytest tests/test_smart_money.py tests/test_trailing_stop.py tests/test_claude_advisor.py -v
+.venv/bin/pytest tests/test_sec_insiders.py tests/test_trailing_stop.py tests/test_claude_advisor.py -v
 
 # Live Alpaca integration tests (requires credentials.json)
 .venv/bin/pytest tests/test_alpaca_connection.py -v
 ```
 
-23 unit tests, all mocked — no API calls in CI.
+326 unit tests, all mocked — no API calls in CI.
 
 ## Configuration
 
@@ -133,8 +135,10 @@ Edit `config/settings.json`:
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `trailing_stop.initial_stop_pct` | 0.10 | First floor: 10% below entry |
-| `trailing_stop.trailing_pct` | 0.05 | Trail: 5% below running high |
-| `smart_money.politicians` | ["Michael McCaul"] | Politicians for named-filter mode |
+| `trailing_stop.trailing_pct` | 0.08 | Trail: 8% below running high |
+| `sec_insiders.min_transaction_value` | 100000 | Minimum $ value of an insider's open-market buy |
+| `sec_insiders.require_high_conviction` | true | Restrict to CEO/CFO/Director-tier roles |
+| `analyze.max_txdate_age_days` | 45 | Skip signals whose transaction date is older than this (legal filing deadline) |
 | `wheel.put_otm_pct` | 0.05 | Sell put 5% below market |
 | `wheel.call_otm_pct` | 0.05 | Sell call 5% above market |
 
