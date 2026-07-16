@@ -474,7 +474,7 @@ def start():
     schedule.every(wheel_min).minutes.do(_run_wheel)
     schedule.every(analyze_min).minutes.do(_run_analyze)
     schedule.every().day.at(summary_time).do(_run_daily_summary)
-    schedule.every(1).minutes.do(_poll_telegram)
+    schedule.every(15).seconds.do(_poll_telegram)
     schedule.every(60).minutes.do(_check_data_source)
 
     from core.notifier import is_configured, send_message, register_command
@@ -501,4 +501,4 @@ def start():
 
     while True:
         schedule.run_pending()
-        time.sleep(30)
+        time.sleep(10)
