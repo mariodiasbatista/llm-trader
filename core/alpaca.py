@@ -257,3 +257,12 @@ def get_bars_range(symbol: str, start, end):
     )
     bars = _data_client().get_stock_bars(req)
     return bars[symbol] if symbol in bars.data else []
+
+
+def get_sma(symbol: str, days: int = 20) -> float | None:
+    """Trailing simple moving average of daily closes, for the live trend filter."""
+    bars = get_bars(symbol, days=days * 3)  # buffer for weekends/holidays
+    closes = [float(b.close) for b in bars]
+    if len(closes) < days:
+        return None
+    return sum(closes[-days:]) / days

@@ -14,7 +14,7 @@ import json
 import argparse
 from datetime import datetime
 
-from core.alpaca import get_account, get_positions, market_buy, get_latest_price, trailing_stop_sell
+from core.alpaca import get_account, get_positions, market_buy, get_latest_price, trailing_stop_sell, get_sma
 from core.logger import load_state, save_state, log_trade, log, state_lock
 from core.notifier import is_configured as telegram_configured, send_message, send_insufficient_funds_alert, escape_md
 from strategies.sec_insiders import fetch_insider_buys
@@ -56,6 +56,7 @@ def main():
     stop_cooldown_days  = _analyze_cfg.get("stop_cooldown_days", 0)
     max_txdate_age_days = _analyze_cfg.get("max_txdate_age_days", 0)
     min_entry_price     = _analyze_cfg.get("min_entry_price", 0)
+    trend_filter_sma_days = _analyze_cfg.get("trend_filter_sma_days", 0)
 
     min_value = args.min_value or _insiders_cfg.get("min_transaction_value", 100_000)
     require_high_conviction = not args.all_roles
@@ -167,6 +168,20 @@ def main():
             log.info(f"[{ticker}] Price ${price:.2f} below min_entry_price ${min_entry_price:.2f} — skipping")
             _mark_processed(trade_key)
             continue
+
+        # Backtest-driven filter: entries below their own trailing SMA (a stock
+        # already in a downtrend at the moment of purchase) skewed heavily toward
+        # losers in the historical replay — see backtest/results/leaderboard_final.md.
+        if trend_filter_sma_days > 0:
+            try:
+                sma = get_sma(ticker, trend_filter_sma_days)
+            except Exception as e:
+                sma = None
+                log.warning(f"[{ticker}] Cannot get {trend_filter_sma_days}-day SMA: {e}")
+            if sma is not None and price < sma:
+                log.info(f"[{ticker}] Price ${price:.2f} below {trend_filter_sma_days}-day SMA ${sma:.2f} — skipping")
+                _mark_processed(trade_key)
+                continue
 
         market_ctx = {
             "price":                 price,

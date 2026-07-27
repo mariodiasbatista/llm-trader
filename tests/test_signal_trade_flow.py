@@ -1308,3 +1308,76 @@ class TestMinEntryPriceFilter:
         """min_entry_price=0 disables the filter; even a sub-$5 ticker reaches Claude."""
         mock_rec, _ = self._run([self._signal("ZSTK")], price=1.29, min_entry_price=0)
         mock_rec.assert_called_once()
+
+
+# ── 15. trend_filter_sma_days filter ────────────────────────────────────────────
+
+class TestTrendFilter:
+    """Backtest-driven filter: entries below their own trailing SMA are rejected before Claude."""
+
+    def _signal(self, ticker="COHR", pol_id="P001"):
+        return {
+            "txDate": _d(1),
+            "publishedDate": _d(0),
+            "txType": "purchase",
+            "size": "$100,001 - $250,000",
+            "asset": {"ticker": ticker},
+            "politician": {"name": "Maria Salazar", "id": pol_id},
+        }
+
+    def _skip_rec(self):
+        return {
+            "strategy": "SKIP", "confidence": 0, "reasoning": "test",
+            "suggested_position_size_pct": 0.0, "key_risk": "",
+            "_cache_hit": False, "_tokens_saved": 0,
+        }
+
+    def _run(self, signals, price, sma, trend_filter_sma_days=20):
+        mod = _load_analyze_module()
+        acct = MagicMock()
+        acct.buying_power = 50_000.0
+        import json
+        settings = {
+            "analyze": {"size_up": False, "trend_filter_sma_days": trend_filter_sma_days},
+            "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {},
+        }
+        state = {"positions": {}, "wheel": {}, "copied_trades": [], "pending_trades": {}, "stopped_out": {}}
+        with patch.object(mod, "get_account", return_value=acct), \
+             patch.object(mod, "get_positions", return_value=[]), \
+             patch.object(mod, "get_latest_price", return_value=price), \
+             patch.object(mod, "get_sma", return_value=sma), \
+             patch.object(mod, "fetch_insider_buys", return_value=signals), \
+             patch.object(mod, "get_recommendation", return_value=self._skip_rec()) as mock_rec, \
+             patch.object(mod, "load_state", return_value=state), \
+             patch.object(mod, "save_state") as mock_save, \
+             patch.object(mod, "state_lock", _noop_lock), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(settings)), \
+             patch("sys.argv", ["analyze_and_trade.py"]):
+            mod.main()
+        return mock_rec, mock_save
+
+    def test_price_below_sma_never_reaches_claude(self):
+        """A downtrending entry ($344 price, $372 SMA) is rejected before Claude is even asked."""
+        mock_rec, _ = self._run([self._signal("COHR")], price=344.0, sma=371.86)
+        mock_rec.assert_not_called()
+
+    def test_price_above_sma_reaches_claude(self):
+        """An uptrending entry ($10 price, $9 SMA) clears the filter and reaches Claude normally."""
+        mock_rec, _ = self._run([self._signal("ARTV")], price=10.20, sma=9.48)
+        mock_rec.assert_called_once()
+
+    def test_missing_sma_data_reaches_claude(self):
+        """No SMA data available (e.g. new listing) — fail open, don't block the signal."""
+        mock_rec, _ = self._run([self._signal("NEWCO")], price=25.0, sma=None)
+        mock_rec.assert_called_once()
+
+    def test_rejected_signal_is_marked_processed(self):
+        """A trend-filter rejection still persists the trade_key — no repeated rescans."""
+        _, mock_save = self._run([self._signal("COHR")], price=344.0, sma=371.86)
+        saved = mock_save.call_args[0][0]
+        assert f"{_d(1)}_COHR_P001" in saved["copied_trades"]
+
+    def test_zero_trend_filter_sma_days_disables_filter(self):
+        """trend_filter_sma_days=0 disables the filter; a downtrending entry still reaches Claude."""
+        mock_rec, _ = self._run([self._signal("COHR")], price=344.0, sma=371.86, trend_filter_sma_days=0)
+        mock_rec.assert_called_once()

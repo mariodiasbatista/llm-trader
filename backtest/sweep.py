@@ -21,6 +21,7 @@ from backtest.replay import simulate_trailing_stop
 from backtest.wheel_replay import simulate_wheel_cycle
 from backtest.buckets import bucket_by_month, worst_bucket_pnl, all_buckets_positive
 from backtest.signals import filter_signals, fetch_historical_insider_signals
+from backtest.trend import prefetch_sma_bars, sma_as_of
 
 SETTINGS_FILE = Path(__file__).parent.parent / "config" / "settings.json"
 
@@ -34,6 +35,7 @@ PARAM_GRID = {
     "trailing_stop.ladder_buys_enabled":    [True, False],
     "position_size_usd":                    [3000, 5000, 8000, 10000],
     "min_entry_price":                      [0, 5, 10, 20, 50],
+    "trend_filter_sma_days":                [0, 10, 20, 50],
     "sec_insiders.min_transaction_value":    [100_000, 150_000, 250_000, 500_000],
     "sec_insiders.require_high_conviction":  [True, False],
     "wheel.put_otm_pct":                    [0.03, 0.05, 0.07, 0.10],
@@ -56,10 +58,8 @@ def candidate_from_base(base: dict) -> dict:
         "trailing_stop.profit_target_pct": base["trailing_stop"]["profit_target_pct"],
         "trailing_stop.ladder_buys_enabled": bool(base["trailing_stop"].get("ladder_buys")),
         "position_size_usd": base.get("analyze", {}).get("max_position_usd", 10000),
-        # No live equivalent today — the investigation's strongest finding was that
-        # post-migration losses cluster in thin, sub-$20 micro-caps, so this is
-        # swept from 0 (no filter, matching current behavior) upward.
-        "min_entry_price": 0,
+        "min_entry_price": base.get("analyze", {}).get("min_entry_price", 0),
+        "trend_filter_sma_days": base.get("analyze", {}).get("trend_filter_sma_days", 0),
         "sec_insiders.min_transaction_value": base["sec_insiders"]["min_transaction_value"],
         "sec_insiders.require_high_conviction": base["sec_insiders"]["require_high_conviction"],
         "wheel.put_otm_pct": base["wheel"]["put_otm_pct"],
@@ -108,13 +108,17 @@ def _prefetch_bars(keys: list[tuple[str, date]], days_forward: int = 180) -> dic
 
 # ── Per-evidence-source scoring ───────────────────────────────────────────────
 
-def _score_trailing_stop(positions: list[dict], bars_cache: dict, ts_cfg: dict, position_size_usd: float, min_entry_price: float = 0) -> dict:
+def _score_trailing_stop(positions: list[dict], bars_cache: dict, ts_cfg: dict, position_size_usd: float, min_entry_price: float = 0, sma_bars_cache: dict | None = None, trend_filter_sma_days: int = 0) -> dict:
     records = []
     for pos in positions:
         symbol, start = pos["symbol"], pos["first_buy_date"]
         entry_price = pos["buys"][0]["price"]
         if entry_price < min_entry_price:
             continue
+        if trend_filter_sma_days > 0 and sma_bars_cache is not None:
+            sma = sma_as_of(sma_bars_cache.get((symbol, start)), start, trend_filter_sma_days)
+            if sma is not None and entry_price < sma:
+                continue
         bars = bars_cache.get((symbol, start))
         if not bars:
             continue
@@ -135,7 +139,7 @@ def _score_trailing_stop(positions: list[dict], bars_cache: dict, ts_cfg: dict, 
     }
 
 
-def _score_edgar_replay(signals_raw, bars_cache, ts_cfg, position_size_usd, min_transaction_value, require_high_conviction, min_entry_price: float = 0) -> dict | None:
+def _score_edgar_replay(signals_raw, bars_cache, ts_cfg, position_size_usd, min_transaction_value, require_high_conviction, min_entry_price: float = 0, sma_bars_cache: dict | None = None, trend_filter_sma_days: int = 0) -> dict | None:
     if not signals_raw:
         return None
     filtered = filter_signals(signals_raw, min_transaction_value, require_high_conviction)
@@ -160,6 +164,10 @@ def _score_edgar_replay(signals_raw, bars_cache, ts_cfg, position_size_usd, min_
         entry_price = float(bars[0].close)
         if entry_price < max(min_entry_price, 0.01):
             continue
+        if trend_filter_sma_days > 0 and sma_bars_cache is not None:
+            sma = sma_as_of(sma_bars_cache.get((symbol, entry_date)), entry_date, trend_filter_sma_days)
+            if sma is not None and entry_price < sma:
+                continue
         result = simulate_trailing_stop(symbol, entry_date, entry_price, ts_cfg, position_size_usd, bars=bars)
         if result is None:
             continue
@@ -213,6 +221,7 @@ def run_sweep(
     positions = [p for p in build_positions(parse_trades_log()) if p["buys"]]
 
     bars_cache = _prefetch_bars([(p["symbol"], p["first_buy_date"]) for p in positions])
+    sma_keys = [(p["symbol"], p["first_buy_date"]) for p in positions]
 
     signals_raw = []
     edgar_bars_cache = {}
@@ -228,6 +237,11 @@ def run_sweep(
             except (ValueError, KeyError):
                 continue
         edgar_bars_cache = _prefetch_bars(keys)
+        sma_keys += keys
+
+    # One SMA bar-window prefetch (up to the largest trend_filter_sma_days in the
+    # grid) covers every candidate's smaller-window SMA too — sliced from the same cache.
+    sma_bars_cache = prefetch_sma_bars(sma_keys)
 
     wheel_universe = list({(p["symbol"], p["first_buy_date"]) for p in positions})
     wheel_bars_cache = _prefetch_bars(wheel_universe, days_forward=120)
@@ -235,12 +249,16 @@ def run_sweep(
     def evaluate(candidate: dict) -> dict:
         ts_cfg, wheel_cfg, pos_size = candidate_to_cfgs(candidate)
         min_entry_price = candidate["min_entry_price"]
-        real_result = _score_trailing_stop(positions, bars_cache, ts_cfg, pos_size, min_entry_price)
+        trend_filter_sma_days = candidate["trend_filter_sma_days"]
+        real_result = _score_trailing_stop(
+            positions, bars_cache, ts_cfg, pos_size, min_entry_price,
+            sma_bars_cache, trend_filter_sma_days,
+        )
         edgar_result = _score_edgar_replay(
             signals_raw, edgar_bars_cache, ts_cfg, pos_size,
             candidate["sec_insiders.min_transaction_value"],
             candidate["sec_insiders.require_high_conviction"],
-            min_entry_price,
+            min_entry_price, sma_bars_cache, trend_filter_sma_days,
         )
         wheel_result = _score_wheel(wheel_universe, wheel_bars_cache, wheel_cfg)
 
