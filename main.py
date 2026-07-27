@@ -12,6 +12,7 @@ Commands:
   performance     Compare TRAILING_STOP vs WHEEL strategy P&L
   summary         End-of-day portfolio summary
   wheel <TICKER>  Start The Wheel on a stock manually
+  reconcile-state Clean up stale state.json entries vs live Alpaca positions
 
 Examples:
   python main.py status
@@ -81,6 +82,9 @@ def main():
 
     elif command == "wheel":
         run_script("setup_wheel.py", rest)
+
+    elif command == "reconcile-state":
+        run_script("reconcile_state.py", rest)
 
     else:
         print(f"Unknown command: {command}\n")

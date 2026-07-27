@@ -1,9 +1,9 @@
 {
   "trailing_stop": {
     "enabled": true,
-    "initial_stop_pct": 0.10,
+    "initial_stop_pct": 0.08,
     "trailing_pct": 0.08,
-    "take_profit_pct": 0.08,
+    "take_profit_pct": 0.06,
     "profit_target_pct": 0.03,
     "trailing_pct_from_profit": 0.05,
     "ladder_buys": [
@@ -43,9 +43,10 @@
   },
   "analyze": {
     "size_up": false,
-    "max_position_usd": 10000,
+    "max_position_usd": 3000,
     "stop_cooldown_days": 5,
-    "max_txdate_age_days": 45
+    "max_txdate_age_days": 45,
+    "min_entry_price": 50
   },
   "telegram_log_level": 2,
   "schedule": {

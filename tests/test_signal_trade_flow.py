@@ -636,7 +636,7 @@ class TestSkipSignalMarkedAsProcessed:
         }
         with patch.object(mod, "get_account", return_value=acct), \
              patch.object(mod, "get_positions", return_value=[]), \
-             patch.object(mod, "get_latest_price", return_value=19.0), \
+             patch.object(mod, "get_latest_price", return_value=60.0), \
              patch.object(mod, "fetch_insider_buys", return_value=signals), \
              patch.object(mod, "get_recommendation", return_value=rec) as mock_rec, \
              patch.object(mod, "load_state", return_value=state), \
@@ -1236,3 +1236,75 @@ class TestTxDateFreshnessFilter:
         """Real-world case: 483-day-old trade just filed today is filtered out."""
         mock_rec = self._run([self._signal(tx_days_ago=483, pub_days_ago=0)])
         mock_rec.assert_not_called()
+
+
+# ── 14. min_entry_price filter ────────────────────────────────────────────────
+
+class TestMinEntryPriceFilter:
+    """Backtest-driven filter: sub-floor-priced tickers are rejected before Claude."""
+
+    def _signal(self, ticker="VANI", pol_id="P001"):
+        return {
+            "txDate": _d(1),
+            "publishedDate": _d(0),
+            "txType": "purchase",
+            "size": "$100,001 - $250,000",
+            "asset": {"ticker": ticker},
+            "politician": {"name": "Maria Salazar", "id": pol_id},
+        }
+
+    def _skip_rec(self):
+        return {
+            "strategy": "SKIP", "confidence": 0, "reasoning": "test",
+            "suggested_position_size_pct": 0.0, "key_risk": "",
+            "_cache_hit": False, "_tokens_saved": 0,
+        }
+
+    def _run(self, signals, price, min_entry_price=50):
+        mod = _load_analyze_module()
+        acct = MagicMock()
+        acct.buying_power = 50_000.0
+        import json
+        settings = {
+            "analyze": {"size_up": False, "min_entry_price": min_entry_price},
+            "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {},
+        }
+        state = {"positions": {}, "wheel": {}, "copied_trades": [], "pending_trades": {}, "stopped_out": {}}
+        with patch.object(mod, "get_account", return_value=acct), \
+             patch.object(mod, "get_positions", return_value=[]), \
+             patch.object(mod, "get_latest_price", return_value=price), \
+             patch.object(mod, "fetch_insider_buys", return_value=signals), \
+             patch.object(mod, "get_recommendation", return_value=self._skip_rec()) as mock_rec, \
+             patch.object(mod, "load_state", return_value=state), \
+             patch.object(mod, "save_state") as mock_save, \
+             patch.object(mod, "state_lock", _noop_lock), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(settings)), \
+             patch("sys.argv", ["analyze_and_trade.py"]):
+            mod.main()
+        return mock_rec, mock_save
+
+    def test_price_below_floor_never_reaches_claude(self):
+        """A $1.75 micro-cap is rejected before Claude is even asked."""
+        mock_rec, _ = self._run([self._signal("VANI")], price=1.75)
+        mock_rec.assert_not_called()
+
+    def test_price_above_floor_reaches_claude(self):
+        """A $344 large-cap clears the floor and reaches Claude normally."""
+        mock_rec, _ = self._run([self._signal("COHR")], price=344.0)
+        mock_rec.assert_called_once()
+
+    def test_price_exactly_at_floor_reaches_claude(self):
+        """Price exactly at the floor is accepted, not rejected."""
+        mock_rec, _ = self._run([self._signal("EDGE")], price=50.0)
+        mock_rec.assert_called_once()
+
+    def test_rejected_signal_is_marked_processed(self):
+        """A price-floor rejection still persists the trade_key — no repeated rescans."""
+        _, mock_save = self._run([self._signal("VANI")], price=1.75)
+        saved = mock_save.call_args[0][0]
+        assert f"{_d(1)}_VANI_P001" in saved["copied_trades"]
+
+    def test_zero_min_entry_price_disables_filter(self):
+        """min_entry_price=0 disables the filter; even a sub-$5 ticker reaches Claude."""
+        mock_rec, _ = self._run([self._signal("ZSTK")], price=1.29, min_entry_price=0)
+        mock_rec.assert_called_once()

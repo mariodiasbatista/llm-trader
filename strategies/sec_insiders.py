@@ -85,16 +85,26 @@ def _value_to_size_label(value: float) -> str:
 
 # ─── EDGAR fetch helpers ──────────────────────────────────────────────────────
 
-def _fetch_filings_metadata(days_back: int = 1, max_filings: int = 200) -> list:
+def _fetch_filings_metadata(
+    days_back: int = 1,
+    max_filings: int = 200,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> list:
     """
-    Return list of (acc_no, doc_name, filing_date, ciks) for recent Form 4 filings.
+    Return list of (acc_no, doc_name, filing_date, ciks) for Form 4 filings.
+
+    By default scans the last `days_back` days from today. Pass explicit
+    `start_date`/`end_date` instead to pull an arbitrary historical window
+    (used by backtest/signals.py to replay a larger sample than the live
+    1-day lookback ever sees).
 
     EDGAR search IDs have the format "accno:docname". The _source.ciks field
     lists all CIKs involved — typically [reporter_cik, issuer_cik]. We pass
     both so _fetch_filing can try the correct archive path.
     """
-    end_dt = date.today()
-    start_dt = end_dt - timedelta(days=days_back)
+    end_dt = end_date or date.today()
+    start_dt = start_date or (end_dt - timedelta(days=days_back))
 
     filings = []
     from_offset = 0

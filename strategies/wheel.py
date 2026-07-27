@@ -6,7 +6,7 @@ Stage 2 → If assigned (stock drops below strike), sell a covered call above pr
          → If called away (stock rises above call strike), roll back to Stage 1
 
 Rules:
-- Close contracts early at 50% profit
+- Close contracts early at profit_close_pct (buy-to-close, then roll to a fresh contract)
 - Check every 15 minutes during market hours
 - Requires Level 2 options approval on Alpaca
 """
@@ -16,7 +16,10 @@ from pathlib import Path
 
 from alpaca.trading.enums import OrderSide
 
-from core.alpaca import submit_option_order, get_latest_price, get_option_mid_price, get_position, get_open_orders
+from core.alpaca import (
+    submit_option_order, close_option_position, get_latest_price,
+    get_option_mid_price, get_position, get_open_orders,
+)
 from core.logger import load_state, save_state, log_trade, log, state_lock
 
 SETTINGS_FILE = Path(__file__).parent.parent / "config" / "settings.json"
@@ -41,40 +44,128 @@ def _next_expiry(weeks_out: int = 2) -> datetime:
     return today + timedelta(days=days_to_friday + (weeks_out - 1) * 7)
 
 
-def start_wheel(symbol: str, contracts: int = 1) -> dict:
-    """Kick off The Wheel by selling the first cash-secured put."""
-    cfg = _settings()
+def _sell_put(symbol: str, cfg: dict, contracts: int) -> dict | None:
+    """Sell a cash-secured put and return the resulting wheel-state dict, or None if quote unavailable."""
     price = get_latest_price(symbol)
     put_strike = round(price * (1 - cfg.get("put_otm_pct", 0.05)))
-
     expiry = _next_expiry(cfg.get("weeks_to_expiry", 2))
     option_sym = _occ_symbol(symbol, expiry, "put", put_strike)
 
     premium = get_option_mid_price(option_sym)
     if premium <= 0:
         log.warning(f"[{symbol}] Put premium is zero — quote unavailable for {option_sym}, skipping")
-        return {}
-    order = submit_option_order(option_sym, contracts, OrderSide.SELL)
+        return None
+
+    try:
+        order = submit_option_order(option_sym, contracts, OrderSide.SELL)
+    except Exception as e:
+        log.error(f"[{symbol}] Failed to sell put: {e}")
+        return None
     fill_price = float(order.filled_avg_price) if order.filled_avg_price is not None else premium
     log_trade(
         "SELL_PUT", symbol, contracts, fill_price,
         f"option={option_sym} strike={put_strike}"
         + ("" if order.filled_avg_price is not None else " unconfirmed_fill=true")
     )
+    return {
+        "stage": 1,
+        "contracts": contracts,
+        "put_strike": put_strike,
+        "option_symbol": option_sym,
+        "premium_collected": fill_price,
+        "expiry": expiry.strftime("%Y-%m-%d"),
+        "started": datetime.now().isoformat(),
+    }
+
+
+def _sell_call(symbol: str, cfg: dict, contracts: int, price: float) -> dict | None:
+    """Sell a covered call and return the resulting wheel-state dict, or None if quote unavailable."""
+    call_strike = round(price * (1 + cfg.get("call_otm_pct", 0.05)))
+    expiry = _next_expiry(cfg.get("weeks_to_expiry", 2))
+    option_sym = _occ_symbol(symbol, expiry, "call", call_strike)
+
+    premium = get_option_mid_price(option_sym)
+    if premium <= 0:
+        log.warning(f"[{symbol}] Call premium is zero — quote unavailable for {option_sym}, skipping")
+        return None
+
+    try:
+        order = submit_option_order(option_sym, contracts, OrderSide.SELL)
+    except Exception as e:
+        log.error(f"[{symbol}] Failed to sell covered call: {e}")
+        return None
+    fill_price = float(order.filled_avg_price) if order.filled_avg_price is not None else premium
+    log_trade(
+        "SELL_CALL", symbol, contracts, fill_price,
+        f"option={option_sym} strike={call_strike}"
+        + ("" if order.filled_avg_price is not None else " unconfirmed_fill=true")
+    )
+    return {
+        "stage": 2,
+        "contracts": contracts,
+        "call_strike": call_strike,
+        "option_symbol": option_sym,
+        "premium_collected": fill_price,
+        "expiry": expiry.strftime("%Y-%m-%d"),
+        "started": datetime.now().isoformat(),
+    }
+
+
+def start_wheel(symbol: str, contracts: int = 1) -> dict:
+    """Kick off The Wheel by selling the first cash-secured put."""
+    cfg = _settings()
+    ws = _sell_put(symbol, cfg, contracts)
+    if ws is None:
+        return {}
 
     with state_lock():
         state = load_state()
-        state.setdefault("wheel", {})[symbol] = {
-            "stage": 1,
-            "contracts": contracts,
-            "put_strike": put_strike,
-            "option_symbol": option_sym,
-            "expiry": expiry.strftime("%Y-%m-%d"),
-            "started": datetime.now().isoformat(),
-        }
+        state.setdefault("wheel", {})[symbol] = ws
         save_state(state)
-    log.info(f"[{symbol}] Wheel started | Stage 1 | sold put @ ${put_strike} exp {expiry.date()}")
-    return state["wheel"][symbol]
+    log.info(f"[{symbol}] Wheel started | Stage 1 | sold put @ ${ws['put_strike']} exp {ws['expiry']}")
+    return ws
+
+
+def _try_early_profit_close(symbol: str, ws: dict, cfg: dict, price: float) -> tuple[bool, dict | None]:
+    """
+    Buy-to-close the current option leg if profit_close_pct has been captured, then
+    roll into a fresh contract of the same stage (new put if stage 1, new call if stage 2).
+
+    Returns (closed, new_ws). new_ws is None if closed but no roll was possible
+    (quote unavailable) — caller should drop the symbol from state in that case.
+    """
+    option_sym = ws.get("option_symbol")
+    premium_collected = ws.get("premium_collected")
+    if not option_sym or not premium_collected:
+        return False, None
+
+    current_mid = get_option_mid_price(option_sym)
+    if current_mid <= 0:
+        return False, None
+
+    # Short-option P&L is inverted vs. long stock: the premium seller profits
+    # as the option's price falls (it becomes cheaper to buy back), not as it rises.
+    pct_captured = (premium_collected - current_mid) / premium_collected
+    profit_close_pct = cfg.get("profit_close_pct", 0.5)
+    if pct_captured < profit_close_pct:
+        return False, None
+
+    stage = ws.get("stage", 1)
+    contracts = ws.get("contracts", 1)
+    try:
+        close_order = close_option_position(option_sym, contracts)
+        close_fill = float(close_order.filled_avg_price) if close_order.filled_avg_price is not None else current_mid
+        log_trade(
+            "TAKE_PROFIT", symbol, contracts, close_fill,
+            f"option={option_sym} pct_captured={pct_captured:.1%}"
+            + ("" if close_order.filled_avg_price is not None else " unconfirmed_fill=true")
+        )
+    except Exception as e:
+        log.error(f"[{symbol}] Early profit-close failed: {e}")
+        return False, None
+
+    new_ws = _sell_put(symbol, cfg, contracts) if stage == 1 else _sell_call(symbol, cfg, contracts, price)
+    return True, new_ws
 
 
 def check_and_manage() -> dict:
@@ -99,6 +190,17 @@ def check_and_manage() -> dict:
             price = get_latest_price(symbol)
             stage = ws.get("stage", 1)
             contracts = ws.get("contracts", 1)
+
+            closed, new_ws = _try_early_profit_close(symbol, ws, cfg, price)
+            if closed:
+                if new_ws:
+                    wheel[symbol] = new_ws
+                    actions.append(f"{symbol}: closed stage {stage} early for profit, rolled to new contract")
+                else:
+                    del wheel[symbol]
+                    actions.append(f"{symbol}: closed stage {stage} early for profit, no roll (quote unavailable)")
+                continue
+
             expiry = datetime.strptime(expiry_str, "%Y-%m-%d")
 
             if stage == 1:
@@ -107,28 +209,10 @@ def check_and_manage() -> dict:
                 shares = float(pos.qty) if pos else 0
                 if shares >= 100 * contracts:
                     log.info(f"[{symbol}] Assigned at put stage — moving to Stage 2 (covered calls)")
-                    call_strike = round(price * (1 + cfg.get("call_otm_pct", 0.05)))
-                    new_expiry = _next_expiry(cfg.get("weeks_to_expiry", 2))
-                    option_sym = _occ_symbol(symbol, new_expiry, "call", call_strike)
-                    try:
-                        call_premium = get_option_mid_price(option_sym)
-                        if call_premium <= 0:
-                            log.warning(f"[{symbol}] Call premium is zero — quote unavailable for {option_sym}, skipping")
-                        else:
-                            call_order = submit_option_order(option_sym, contracts, OrderSide.SELL)
-                            call_fill_price = float(call_order.filled_avg_price) if call_order.filled_avg_price is not None else call_premium
-                            log_trade(
-                                "SELL_CALL", symbol, contracts, call_fill_price,
-                                f"option={option_sym} strike={call_strike}"
-                                + ("" if call_order.filled_avg_price is not None else " unconfirmed_fill=true")
-                            )
-                            ws["stage"] = 2
-                            ws["call_strike"] = call_strike
-                            ws["option_symbol"] = option_sym
-                            ws["expiry"] = new_expiry.strftime("%Y-%m-%d")
-                            actions.append(f"{symbol}: Stage 1→2 | sold call @ ${call_strike}")
-                    except Exception as e:
-                        log.error(f"[{symbol}] Failed to sell covered call: {e}")
+                    new_ws = _sell_call(symbol, cfg, contracts, price)
+                    if new_ws:
+                        wheel[symbol] = new_ws
+                        actions.append(f"{symbol}: Stage 1→2 | sold call @ ${new_ws['call_strike']}")
 
             elif stage == 2:
                 # Check if shares were called away
@@ -136,28 +220,10 @@ def check_and_manage() -> dict:
                 shares = float(pos.qty) if pos else 0
                 if shares < 100 * contracts:
                     log.info(f"[{symbol}] Shares called away — rolling back to Stage 1")
-                    put_strike = round(price * (1 - cfg.get("put_otm_pct", 0.05)))
-                    new_expiry = _next_expiry(cfg.get("weeks_to_expiry", 2))
-                    option_sym = _occ_symbol(symbol, new_expiry, "put", put_strike)
-                    try:
-                        put_premium = get_option_mid_price(option_sym)
-                        if put_premium <= 0:
-                            log.warning(f"[{symbol}] Put premium is zero — quote unavailable for {option_sym}, skipping")
-                        else:
-                            put_order = submit_option_order(option_sym, contracts, OrderSide.SELL)
-                            put_fill_price = float(put_order.filled_avg_price) if put_order.filled_avg_price is not None else put_premium
-                            log_trade(
-                                "SELL_PUT", symbol, contracts, put_fill_price,
-                                f"option={option_sym} strike={put_strike}"
-                                + ("" if put_order.filled_avg_price is not None else " unconfirmed_fill=true")
-                            )
-                            ws["stage"] = 1
-                            ws["put_strike"] = put_strike
-                            ws["option_symbol"] = option_sym
-                            ws["expiry"] = new_expiry.strftime("%Y-%m-%d")
-                            actions.append(f"{symbol}: Stage 2→1 | sold put @ ${put_strike}")
-                    except Exception as e:
-                        log.error(f"[{symbol}] Failed to sell put: {e}")
+                    new_ws = _sell_put(symbol, cfg, contracts)
+                    if new_ws:
+                        wheel[symbol] = new_ws
+                        actions.append(f"{symbol}: Stage 2→1 | sold put @ ${new_ws['put_strike']}")
 
         state["wheel"] = wheel
         save_state(state)

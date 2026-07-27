@@ -190,6 +190,23 @@ def submit_option_order(option_symbol: str, qty: int, side: OrderSide):
     return result
 
 
+def close_option_position(option_symbol: str, qty: int):
+    """
+    Buy-to-close a short option position. WHEEL only ever sells to open
+    (cash-secured puts / covered calls), so closing always means buying back.
+    """
+    order = MarketOrderRequest(
+        symbol=option_symbol,
+        qty=qty,
+        side=OrderSide.BUY,
+        time_in_force=TimeInForce.DAY,
+        client_order_id=_order_id(f"opt-close-{option_symbol[:6]}"),
+    )
+    result = _wait_for_fill(_trading_client().submit_order(order))
+    _debug(f"[alpaca] option close submitted id={result.id} status={result.status} filled_avg_price={result.filled_avg_price}")
+    return result
+
+
 def get_option_mid_price(option_symbol: str) -> float:
     """Return bid/ask midpoint for an option contract. Returns 0.0 if unavailable."""
     try:
@@ -228,3 +245,15 @@ def get_bars(symbol: str, days: int = 30):
         end=end,
     )
     return _data_client().get_stock_bars(req)[symbol]
+
+
+def get_bars_range(symbol: str, start, end):
+    """Daily bars for an explicit historical [start, end] window — used by backtest/replay.py."""
+    req = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=TimeFrame.Day,
+        start=start,
+        end=end,
+    )
+    bars = _data_client().get_stock_bars(req)
+    return bars[symbol] if symbol in bars.data else []

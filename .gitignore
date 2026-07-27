@@ -10,3 +10,5 @@ logs/trades.log
 .DS_Store
 *.egg-info/
 dist/
+backtest/cache/
+backtest/results/*.json

@@ -2,13 +2,16 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
+from alpaca.trading.enums import AssetClass
 
-def _make_position(symbol, current_price, avg_entry, qty=10):
+
+def _make_position(symbol, current_price, avg_entry, qty=10, asset_class=AssetClass.US_EQUITY):
     pos = MagicMock()
     pos.symbol = symbol
     pos.current_price = str(current_price)
     pos.avg_entry_price = str(avg_entry)
     pos.qty = str(qty)
+    pos.asset_class = asset_class
     return pos
 
 

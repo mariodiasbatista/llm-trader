@@ -55,6 +55,7 @@ def main():
     max_position_usd    = _analyze_cfg.get("max_position_usd", None)
     stop_cooldown_days  = _analyze_cfg.get("stop_cooldown_days", 0)
     max_txdate_age_days = _analyze_cfg.get("max_txdate_age_days", 0)
+    min_entry_price     = _analyze_cfg.get("min_entry_price", 0)
 
     min_value = args.min_value or _insiders_cfg.get("min_transaction_value", 100_000)
     require_high_conviction = not args.all_roles
@@ -157,6 +158,14 @@ def main():
             price = get_latest_price(ticker)
         except Exception as e:
             log.warning(f"[{ticker}] Cannot get price: {e}")
+            continue
+
+        # Backtest-driven filter: post-migration losses clustered heavily in thin,
+        # sub-$20 micro-caps — a price floor was the single largest lever the
+        # parameter sweep found for improving realized P&L.
+        if min_entry_price > 0 and price < min_entry_price:
+            log.info(f"[{ticker}] Price ${price:.2f} below min_entry_price ${min_entry_price:.2f} — skipping")
+            _mark_processed(trade_key)
             continue
 
         market_ctx = {
