@@ -66,7 +66,30 @@
       "Bash(grep -n '`/help`\\\\|`/loglevel`\\\\|`/summary`\\\\|`/schedule`\\\\|backtick\\\\|cmd_name.*assert\\\\|assert.*cmd_name\\\\|/help.*message\\\\|loglevel.*Telegram' /var/projects/llmTrader/tests/test_notifier.py)",
       "Bash(sudo kill *)",
       "Bash(sudo cp *)",
-      "Bash(kill -9 397226)"
+      "Bash(kill -9 397226)",
+      "Bash(git -C /var/projects/llmTrader status)",
+      "Bash(git -C /var/projects/llmTrader diff)",
+      "Bash(git -C /var/projects/llmTrader add config/settings.json scripts/analyze_and_trade.py tests/test_signal_trade_flow.py tests/test_trailing_stop.py)",
+      "Bash(git -C /var/projects/llmTrader commit -m ' *)",
+      "Bash(git *)",
+      "Bash(awk -F: 'NR>=1 && $1>=8930 && $1<=8960')",
+      "Bash(awk -F: '{line=$1; if\\(line >= 8900 && line <= 9000\\) print}')",
+      "Bash(awk -F: '{n=$1; if\\(n>=16390 && n<=16420\\) print}')",
+      "Bash(awk -F: '{n=$1; if\\(n>=16580 && n<=16605\\) print}')",
+      "Bash(awk -F: '{n=$1; if\\(n>=22220 && n<=22245\\) print}')",
+      "Bash(/var/projects/llmTrader/.venv/bin/python *)",
+      "Bash(/var/projects/llmTrader/.venv/bin/python3 *)",
+      "Bash(grep --line-buffered -E \"Option|SUMMARY|Error|Traceback|WIN|LOSS|ROI|verdict|done|complete|\\\\$|═|─\")",
+      "Bash(grep --line-buffered -E \"Option|SUMMARY|Error|Traceback|WIN|LOSS|ROI|verdict|═|─|fetching|Capitol|SEC|complete|\\\\$[0-9]\")",
+      "Bash(tmux capture-pane *)",
+      "Bash(crontab -l)",
+      "mcp__alpaca__get_stock_bars",
+      "mcp__alpaca__get_clock",
+      "mcp__alpaca__get_open_position",
+      "mcp__alpaca__get_orders"
     ]
+  },
+  "remote": {
+    "defaultEnvironmentId": "env_01VrCnYFk1J6mufuqtMTmyzW"
   }
 }
