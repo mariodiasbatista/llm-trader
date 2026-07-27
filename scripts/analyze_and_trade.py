@@ -115,9 +115,9 @@ def main():
             continue
         seen_this_run.add(trade_key)
 
-        # Form 4 filing lag is max 2 business days — signals older than days+3 are stale.
+        # Form 4 filing lag is max 2 business days — signals days+3 or older are stale.
         pub_date = trade.get("publishedDate") or trade.get("txDate", "")
-        if _days_since(pub_date) > args.days + 3:
+        if _days_since(pub_date) >= args.days + 3:
             log.info(f"[{ticker}] Signal too old (pub={pub_date}) — skipping")
             _mark_processed(trade_key)
             continue
@@ -141,17 +141,20 @@ def main():
                 )
                 continue
 
-        # Position size guard.
+        # Position size guard. position_value/existing_tickers are updated after every
+        # execution below (not just snapshotted once at the top of the run), so multiple
+        # signals for the same new ticker within a single run are capped cumulatively
+        # instead of each independently passing the check.
         if ticker in existing_tickers:
             if not size_up:
                 log.info(f"[{ticker}] Already in portfolio — size_up=false, skipping")
                 continue
-            if max_position_usd is not None and position_value.get(ticker, 0) >= max_position_usd:
-                log.info(
-                    f"[{ticker}] Position cap reached "
-                    f"(${position_value[ticker]:,.0f} >= ${max_position_usd:,.0f}) — skipping"
-                )
-                continue
+        if max_position_usd is not None and position_value.get(ticker, 0) >= max_position_usd:
+            log.info(
+                f"[{ticker}] Position cap reached "
+                f"(${position_value.get(ticker, 0):,.0f} >= ${max_position_usd:,.0f}) — skipping"
+            )
+            continue
 
         try:
             price = get_latest_price(ticker)
@@ -245,6 +248,9 @@ def main():
                     + (f" stop_floor={args.stop_floor}%" if args.stop_floor else "")
                 )
                 buying_power -= cost
+                position_value[ticker] = position_value.get(ticker, 0) + cost
+                if ticker not in existing_tickers:
+                    existing_tickers.append(ticker)
                 result.update({"executed": True, "shares": shares_to_buy})
                 print(f"  EXECUTED   : Bought {shares_to_buy} shares @ ${price:.2f}{stop_note}")
                 if telegram_configured():

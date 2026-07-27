@@ -637,7 +637,7 @@ class TestSkipSignalMarkedAsProcessed:
         with patch.object(mod, "get_account", return_value=acct), \
              patch.object(mod, "get_positions", return_value=[]), \
              patch.object(mod, "get_latest_price", return_value=19.0), \
-             patch.object(mod, "fetch_large_trades", return_value=signals), \
+             patch.object(mod, "fetch_insider_buys", return_value=signals), \
              patch.object(mod, "get_recommendation", return_value=rec) as mock_rec, \
              patch.object(mod, "load_state", return_value=state), \
              patch.object(mod, "save_state") as mock_save, \
@@ -699,7 +699,7 @@ class TestSizeUpFlag:
         with patch.object(mod, "get_account", return_value=acct), \
              patch.object(mod, "get_positions", return_value=existing_positions), \
              patch.object(mod, "get_latest_price", return_value=56.0), \
-             patch.object(mod, "fetch_large_trades", return_value=[signal or self._signal()]), \
+             patch.object(mod, "fetch_insider_buys", return_value=[signal or self._signal()]), \
              patch.object(mod, "get_recommendation") as mock_rec, \
              patch.object(mod, "load_state", return_value=state), \
              patch.object(mod, "save_state"), \
@@ -727,7 +727,7 @@ class TestSizeUpFlag:
 
         with patch.object(mod, "get_account", return_value=acct), \
              patch.object(mod, "get_positions", return_value=[self._existing_position("EQT")]), \
-             patch.object(mod, "fetch_large_trades", return_value=[self._signal("EQT")]), \
+             patch.object(mod, "fetch_insider_buys", return_value=[self._signal("EQT")]), \
              patch.object(mod, "get_recommendation") as mock_rec, \
              patch.object(mod, "load_state", return_value=state), \
              patch.object(mod, "save_state"), \
@@ -759,7 +759,7 @@ class TestSizeUpFlag:
         with patch.object(mod, "get_account", return_value=acct), \
              patch.object(mod, "get_positions", return_value=[self._existing_position("EQT")]), \
              patch.object(mod, "get_latest_price", return_value=56.0), \
-             patch.object(mod, "fetch_large_trades", return_value=[self._signal("EQT")]), \
+             patch.object(mod, "fetch_insider_buys", return_value=[self._signal("EQT")]), \
              patch.object(mod, "get_recommendation", return_value=skip_rec) as mock_rec, \
              patch.object(mod, "load_state", return_value=state), \
              patch.object(mod, "save_state"), \
@@ -791,7 +791,7 @@ class TestSizeUpFlag:
         with patch.object(mod, "get_account", return_value=acct), \
              patch.object(mod, "get_positions", return_value=[self._existing_position("GE")]), \
              patch.object(mod, "get_latest_price", return_value=56.0), \
-             patch.object(mod, "fetch_large_trades", return_value=[self._signal("EQT")]), \
+             patch.object(mod, "fetch_insider_buys", return_value=[self._signal("EQT")]), \
              patch.object(mod, "get_recommendation", return_value=skip_rec) as mock_rec, \
              patch.object(mod, "load_state", return_value=state), \
              patch.object(mod, "save_state"), \
@@ -837,7 +837,7 @@ class TestMaxPositionCap:
         with patch.object(mod, "get_account", return_value=acct), \
              patch.object(mod, "get_positions", return_value=positions), \
              patch.object(mod, "get_latest_price", return_value=56.0), \
-             patch.object(mod, "fetch_large_trades", return_value=[self._signal()]), \
+             patch.object(mod, "fetch_insider_buys", return_value=[self._signal()]), \
              patch.object(mod, "get_recommendation", return_value=skip_rec) as mock_rec, \
              patch.object(mod, "load_state", return_value=state), \
              patch.object(mod, "save_state"), \
@@ -873,6 +873,51 @@ class TestMaxPositionCap:
         }
         mock_rec = self._run([self._position("EQT", 500, 56.0)], settings)  # no cap
         mock_rec.assert_called_once()
+
+    def test_second_signal_for_brand_new_ticker_blocked_within_same_run(self):
+        """Regression for the COE incident: two insider signals for the SAME brand-new
+        ticker arriving in one run must not each execute independently. Once the first
+        signal buys the ticker, position_value/existing_tickers must reflect that
+        immediately so the second signal (different politician, same ticker) is capped
+        instead of doubling the position."""
+        mod = _load_analyze_module()
+        acct = MagicMock()
+        acct.buying_power = 50_000.0
+        state = {"positions": {}, "wheel": {}, "copied_trades": [], "pending_trades": {}}
+        settings = {
+            "analyze": {"size_up": False, "max_position_usd": 10000},
+            "trailing_stop": {}, "wheel": {}, "smart_money": {}, "schedule": {},
+        }
+        trailing_rec = {
+            "strategy": "TRAILING_STOP", "confidence": 70, "reasoning": "test",
+            "suggested_position_size_pct": 0.2, "key_risk": "",
+            "_cache_hit": False, "_tokens_saved": 0,
+        }
+        signals = [
+            self._signal("COE"),
+            {**self._signal("COE"), "politician": {"name": "Someone Else", "id": "M999"}},
+        ]
+
+        import json
+        with patch.object(mod, "get_account", return_value=acct), \
+             patch.object(mod, "get_positions", return_value=[]), \
+             patch.object(mod, "get_latest_price", return_value=56.0), \
+             patch.object(mod, "fetch_insider_buys", return_value=signals), \
+             patch.object(mod, "get_recommendation", return_value=trailing_rec) as mock_rec, \
+             patch.object(mod, "market_buy") as mock_buy, \
+             patch.object(mod, "log_trade"), \
+             patch.object(mod, "telegram_configured", return_value=False), \
+             patch.object(mod, "load_state", return_value=state), \
+             patch.object(mod, "save_state"), \
+             patch.object(mod, "state_lock", _noop_lock), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(settings)), \
+             patch("sys.argv", ["analyze_and_trade.py"]):
+            mod.main()
+
+        # Only the first signal should reach Claude/execute — the second sees COE
+        # already in existing_tickers (size_up=false) and is skipped before Claude.
+        assert mock_rec.call_count == 1
+        mock_buy.assert_called_once()
 
 
 # ── 9. _mark_processed saves immediately ─────────────────────────────────────
@@ -915,7 +960,7 @@ class TestMarkProcessedPersistsImmediately:
         with patch.object(mod, "get_account", return_value=acct), \
              patch.object(mod, "get_positions", return_value=[]), \
              patch.object(mod, "get_latest_price", return_value=51.0), \
-             patch.object(mod, "fetch_large_trades", return_value=[self._signal()]), \
+             patch.object(mod, "fetch_insider_buys", return_value=[self._signal()]), \
              patch.object(mod, "get_recommendation", return_value=skip_rec), \
              patch.object(mod, "load_state", return_value=initial_state), \
              patch.object(mod, "save_state", side_effect=capture_save), \
@@ -959,7 +1004,7 @@ class TestIntraRunDeduplication:
         with patch.object(mod, "get_account", return_value=acct), \
              patch.object(mod, "get_positions", return_value=[]), \
              patch.object(mod, "get_latest_price", return_value=875.0), \
-             patch.object(mod, "fetch_large_trades", return_value=signals), \
+             patch.object(mod, "fetch_insider_buys", return_value=signals), \
              patch.object(mod, "get_recommendation", return_value=self._skip_rec()) as mock_rec, \
              patch.object(mod, "load_state", return_value=state), \
              patch.object(mod, "save_state"), \
@@ -1035,7 +1080,7 @@ class TestPublishedDateStalenessFilter:
         with patch.object(mod, "get_account", return_value=acct), \
              patch.object(mod, "get_positions", return_value=[]), \
              patch.object(mod, "get_latest_price", return_value=308.0), \
-             patch.object(mod, "fetch_large_trades", return_value=signals), \
+             patch.object(mod, "fetch_insider_buys", return_value=signals), \
              patch.object(mod, "get_recommendation", return_value=self._skip_rec()) as mock_rec, \
              patch.object(mod, "load_state", return_value=state), \
              patch.object(mod, "save_state"), \
@@ -1123,7 +1168,7 @@ class TestStopOutCooldown:
         with patch.object(mod, "get_account", return_value=acct), \
              patch.object(mod, "get_positions", return_value=[]), \
              patch.object(mod, "get_latest_price", return_value=400.0), \
-             patch.object(mod, "fetch_large_trades", return_value=signals), \
+             patch.object(mod, "fetch_insider_buys", return_value=signals), \
              patch.object(mod, "get_recommendation", return_value=self._skip_rec()) as mock_rec, \
              patch.object(mod, "load_state", return_value=state), \
              patch.object(mod, "save_state"), \
@@ -1197,7 +1242,7 @@ class TestTxDateFreshnessFilter:
         with patch.object(mod, "get_account", return_value=acct), \
              patch.object(mod, "get_positions", return_value=[]), \
              patch.object(mod, "get_latest_price", return_value=200.0), \
-             patch.object(mod, "fetch_large_trades", return_value=signals), \
+             patch.object(mod, "fetch_insider_buys", return_value=signals), \
              patch.object(mod, "get_recommendation", return_value=self._skip_rec()) as mock_rec, \
              patch.object(mod, "load_state", return_value=state), \
              patch.object(mod, "save_state"), \
