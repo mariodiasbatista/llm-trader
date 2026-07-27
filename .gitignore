@@ -12,3 +12,7 @@ logs/trades.log
 dist/
 backtest/cache/
 backtest/results/*.json
+.weekly-review-worktree/
+logs-snapshot/
+logs/scheduler.pid
+logs/state.lock
