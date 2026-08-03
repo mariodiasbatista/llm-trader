@@ -25,10 +25,16 @@ mkdir -p "$REPO/logs"
 # cron runs with a minimal PATH; pytest only exists inside the venv
 export PATH="$REPO/.venv/bin:$PATH"
 
-# --- set up (or refresh) the nested worktree, always starting from main ---
+# --- set up (or refresh) the nested worktree ---
+# Uses a dedicated "weekly-base" branch that mirrors origin/main, rather than
+# literally checking out "main" — the live directory permanently owns the
+# actual "main" branch (git refuses to have the same branch checked out in
+# two worktrees at once), so this worktree tracks main's tip under a
+# different local name instead.
 cd "$REPO"
 if [ ! -d "$WORKTREE" ]; then
-    git worktree add "$WORKTREE" main >> "$LOGFILE" 2>&1
+    git fetch origin main >> "$LOGFILE" 2>&1
+    git worktree add -B weekly-base "$WORKTREE" origin/main >> "$LOGFILE" 2>&1
 fi
 cd "$WORKTREE"
 # defense-in-depth: a prior run that hit max-turns mid-edit can leave dirty
@@ -36,8 +42,8 @@ cd "$WORKTREE"
 git checkout -- . >> "$LOGFILE" 2>&1 || true
 git clean -fd >> "$LOGFILE" 2>&1 || true
 rm -f "$SUMMARY_REL"
-git checkout main >> "$LOGFILE" 2>&1
-git pull --ff-only origin main >> "$LOGFILE" 2>&1
+git fetch origin main >> "$LOGFILE" 2>&1
+git checkout -B weekly-base origin/main >> "$LOGFILE" 2>&1
 git branch -D "$BRANCH" >> "$LOGFILE" 2>&1 || true
 git checkout -b "$BRANCH" >> "$LOGFILE" 2>&1
 
@@ -70,7 +76,7 @@ Read-only snapshots of the real historical logs have been copied in for you at t
 You have a limited number of turns for this run. Budget them: don't dump large command output straight into the conversation. When you run backtest/analysis scripts, redirect their output to a relative file (e.g. 'python scripts/backtest.py > backtest_output.txt 2>&1') and then grep/read only the parts you need, rather than letting the full output stream into your own context. If you notice you are running low on turns partway through, stop investigating and go straight to step 6 (write the summary, noting the review was cut short and what you'd check next week) rather than leaving an uncommitted half-finished edit behind.
 
 Steps:
-1. Analyze the last 7 days of those logs plus recent git history (git log on main) for context on recent strategy changes and their outcomes.
+1. Analyze the last 7 days of those logs plus recent git history (git log on weekly-base, which mirrors main) for context on recent strategy changes and their outcomes.
 2. Always run a backtest/simulation against ALL historical data (scripts/backtest.py, scripts/strategy_backtest.py, or equivalent in this worktree) to double-check any hypothesis before proposing a change. Do not propose changes based on log-reading alone.
 3. Do NOT modify code you can show is generating profit. Only modify code that is in a clear, backtest-confirmed loss logic.
 4. If a change is warranted: make it on this branch ($BRANCH), run the test suite (pytest), and only if tests pass, commit, push the branch to origin, then open a PR against main using the GitHub MCP tools (mcp__github__create_pull_request, owner=mariodiasbatista, repo=llm-trader, head=$BRANCH, base=main). Include your backtest evidence in the PR description.
@@ -107,13 +113,13 @@ else
     "$PY" "$REPO/scripts/notify_weekly.py" --fallback "$LOGFILE" "$CLAUDE_EXIT"
 fi
 
-# --- hygiene: if nothing was pushed this week, drop back to main so the
-#     worktree starts clean next Sunday ---
+# --- hygiene: if nothing was pushed this week, drop back to weekly-base so
+#     the worktree starts clean next Sunday ---
 cd "$WORKTREE"
 rm -f "$SUMMARY_REL"
 rm -rf logs-snapshot
 if ! git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-    git checkout main >> "$LOGFILE" 2>&1
+    git checkout weekly-base >> "$LOGFILE" 2>&1
     git branch -D "$BRANCH" >> "$LOGFILE" 2>&1 || true
 fi
 
