@@ -13,9 +13,11 @@ Output format is identical to smart_money.py so the rest of the pipeline
 (analyze_and_trade.py, claude_advisor.py) works without changes.
 """
 
+import threading
 import time
 import logging
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, date
 from xml.etree import ElementTree as ET
 
@@ -30,6 +32,39 @@ HEADERS = {
 
 EDGAR_SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
 EDGAR_ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data"
+
+# Per-filing fetches run concurrently (see _fetch_filing_pool below) — this many
+# workers, all sharing one rate limiter, so wall-clock time drops roughly
+# FETCH_WORKERS-fold vs the old fully-serial loop while the aggregate request
+# rate to SEC stays identical to before.
+FETCH_WORKERS = 6
+
+
+class _RateLimiter:
+    """Thread-safe: never lets a request START less than `min_interval` after
+    the previous one, across *all* threads combined — not per-thread. Multiple
+    threads can still have requests in flight simultaneously (that's the whole
+    point — overlapping I/O wait is what makes the parallel fetch faster), this
+    only throttles how fast new requests are *initiated*.
+    """
+
+    def __init__(self, min_interval: float):
+        self._min_interval = min_interval
+        self._lock = threading.Lock()
+        self._next_allowed = 0.0
+
+    def wait(self):
+        with self._lock:
+            now = time.monotonic()
+            sleep_for = max(0.0, self._next_allowed - now)
+            self._next_allowed = max(now, self._next_allowed) + self._min_interval
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+
+
+# Same ~9 req/s cap the old serial loop used (time.sleep(0.11) between calls),
+# just enforced across concurrent workers instead of one thread at a time.
+_fetch_rate_limiter = _RateLimiter(min_interval=0.11)
 
 # Only open-market purchases signal conviction — everything else is noise.
 PURCHASE_CODE = "P"
@@ -346,28 +381,43 @@ def fetch_insider_buys(
     """
     filings_meta = _fetch_filings_metadata(days_back=days_back, max_filings=max_filings)
 
+    def _fetch_one(item):
+        acc_no, doc_name, filing_date, ciks = item
+        _fetch_rate_limiter.wait()
+        return _fetch_filing(acc_no, doc_name, filing_date, ciks)
+
     signals = []
     processed = 0
 
-    for acc_no, doc_name, filing_date, ciks in filings_meta:
-        xml_text, filing_date = _fetch_filing(acc_no, doc_name, filing_date, ciks)
-        if xml_text is None:
-            time.sleep(0.1)
-            continue
+    # Was a fully serial loop (one filing fetched at a time, ~0.11s apart) —
+    # with up to 400 filings that routinely exceeded the 5-minute analyze
+    # subprocess timeout, silently dropping the entire cycle's signals.
+    # FETCH_WORKERS concurrent requests, throttled by one shared rate limiter
+    # to the same aggregate ~9 req/s SEC cap as before, cuts wall-clock time
+    # roughly FETCH_WORKERS-fold since the bottleneck is I/O wait, not CPU.
+    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+        future_to_item = {pool.submit(_fetch_one, item): item for item in filings_meta}
+        for future in as_completed(future_to_item):
+            try:
+                xml_text, filing_date = future.result()
+            except Exception as e:
+                log.warning(f"Filing fetch failed: {e}")
+                xml_text, filing_date = None, None
 
-        txns = _parse_form4(xml_text, filing_date)
-        for t in txns:
-            if t["_transaction_value"] < min_transaction_value:
+            processed += 1
+            if processed % 25 == 0:
+                log.info(f"  Parsed {processed}/{len(filings_meta)} filings — {len(signals)} signals so far")
+
+            if xml_text is None:
                 continue
-            if require_high_conviction and not t["_high_conviction"]:
-                continue
-            signals.append(t)
 
-        processed += 1
-        if processed % 25 == 0:
-            log.info(f"  Parsed {processed}/{len(filings_meta)} filings — {len(signals)} signals so far")
-
-        time.sleep(0.11)  # ~9 req/s — safely below SEC 10 req/s cap
+            txns = _parse_form4(xml_text, filing_date)
+            for t in txns:
+                if t["_transaction_value"] < min_transaction_value:
+                    continue
+                if require_high_conviction and not t["_high_conviction"]:
+                    continue
+                signals.append(t)
 
     log.info(
         f"SEC EDGAR: {len(signals)} insider buy signals "
