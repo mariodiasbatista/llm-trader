@@ -52,12 +52,23 @@ git checkout -b "$BRANCH" >> "$LOGFILE" 2>&1
 # state.json" call was blocked mid-run). Rather than granting the agent
 # --add-dir access to the REAL logs/ directory (which would also grant write
 # access next to files the live scheduler depends on), the plain bash
-# wrapper — which isn't sandboxed — copies read-only snapshots in instead.
-rm -rf logs-snapshot
-mkdir -p logs-snapshot
-cp "$REPO/logs/trades.log" logs-snapshot/trades.log 2>/dev/null || true
-cp "$REPO/logs/bot.log" logs-snapshot/bot.log 2>/dev/null || true
-cp "$REPO/logs/state.json" logs-snapshot/state.json 2>/dev/null || true
+# wrapper — which isn't sandboxed — copies fresh read-only snapshots directly
+# into the WORKTREE'S OWN logs/ dir (gitignored, so this never gets
+# committed). This must be the worktree's real logs/ path, not a
+# logs-snapshot/ side directory — scripts/backtest.py and friends
+# (strategy_backtest.py, strategy_performance.py, reconcile_state.py,
+# backtest/real_trades.py) all hardcode reading a relative "logs/trades.log"
+# via cwd, not a configurable path. A prior version copied into
+# logs-snapshot/ instead, which none of those scripts ever read, so the
+# worktree's logs/ dir silently kept whatever was checked out weeks ago and
+# backtests ran against stale data with no error (caught 2026-08-16: 4
+# trades missing). git clean -fd (above) does NOT remove these since
+# .gitignore'd files are skipped without -x/-X, so without this explicit
+# sync they'd never refresh on their own.
+mkdir -p logs
+cp "$REPO/logs/trades.log" logs/trades.log 2>/dev/null || true
+cp "$REPO/logs/bot.log" logs/bot.log 2>/dev/null || true
+cp "$REPO/logs/state.json" logs/state.json 2>/dev/null || true
 
 # NOTE on paths: Claude's Write/Edit tool hangs waiting for an approval that
 # never arrives (no TTY) when given an ABSOLUTE path outside a narrow set it
@@ -68,10 +79,11 @@ PROMPT="Re-analyze this codebase against the objective: create the most profitab
 
 You are running unattended, on branch $BRANCH (created from latest main), in your current working directory. IMPORTANT: use RELATIVE paths only for every Read/Write/Edit tool call (e.g. 'strategies/wheel.py', '../logs/trades.log') — never absolute paths starting with /. Absolute paths will hang waiting on a permission prompt nobody can answer.
 
-Read-only snapshots of the real historical logs have been copied in for you at these relative paths — read them, but they are throwaway copies so there is no need to avoid writing near them, just don't bother:
-  - logs-snapshot/trades.log
-  - logs-snapshot/bot.log
-  - logs-snapshot/state.json
+Fresh read-only snapshots of the real historical logs have been synced into this worktree's own logs/ directory for you — this is also the exact relative path scripts/backtest.py and friends read by default, so no special handling is needed to use them in a backtest:
+  - logs/trades.log
+  - logs/bot.log
+  - logs/state.json
+These are throwaway copies (logs/ is gitignored in this repo) — there is no need to avoid writing near them, just don't bother.
 
 You have a limited number of turns for this run. Budget them: don't dump large command output straight into the conversation. When you run backtest/analysis scripts, redirect their output to a relative file (e.g. 'python scripts/backtest.py > backtest_output.txt 2>&1') and then grep/read only the parts you need, rather than letting the full output stream into your own context. If you notice you are running low on turns partway through, stop investigating and go straight to step 6 (write the summary, noting the review was cut short and what you'd check next week) rather than leaving an uncommitted half-finished edit behind.
 
@@ -117,7 +129,8 @@ fi
 #     the worktree starts clean next Sunday ---
 cd "$WORKTREE"
 rm -f "$SUMMARY_REL"
-rm -rf logs-snapshot
+# logs/{trades.log,bot.log,state.json} deliberately left in place — gitignored,
+# and get overwritten with a fresh copy at the top of next week's run anyway.
 if ! git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
     git checkout weekly-base >> "$LOGFILE" 2>&1
     git branch -D "$BRANCH" >> "$LOGFILE" 2>&1 || true
