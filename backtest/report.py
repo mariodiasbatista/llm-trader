@@ -23,13 +23,22 @@ def _month_table(buckets: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _fmt_alpha(result: dict) -> str:
+    avg = result.get("avg_alpha_pct")
+    if avg is None:
+        return "alpha: N/A"
+    pct_pos = result.get("pct_positive_alpha")
+    return f"alpha vs SPY: {avg:+.1f}% avg ({pct_pos:.0f}% of trades beat SPY)"
+
+
 def _evidence_section(title: str, result: dict | None) -> str:
     if result is None:
         return f"**{title}**: not available for this run.\n"
     lines = [
         f"**{title}** — {result['n_trades']} trades, total {_fmt_money(result['total_pnl'])}, "
         f"worst month {_fmt_money(result['worst_month_pnl'])}, "
-        f"{'PASSES' if result['all_positive'] else 'FAILS'} strict per-month-positive check.",
+        f"{'PASSES' if result['all_positive'] else 'FAILS'} strict per-month-positive check, "
+        f"{_fmt_alpha(result)}.",
         "",
         _month_table(result["buckets"]),
     ]

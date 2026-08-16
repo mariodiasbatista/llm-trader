@@ -15,7 +15,7 @@ import sys
 import json
 import re
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -41,6 +41,7 @@ data_client = StockHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
 # ─────────────────────────────────────────────────────────────────────────────
 
 from backtest.real_trades import parse_trades_log
+from backtest.benchmark import fetch_benchmark_closes, benchmark_return_pct, alpha_pct, summarize_alpha
 
 
 def extract_position_pct(notes: str) -> float:
@@ -244,6 +245,14 @@ def compute_pnl(pos: dict, current_prices: dict) -> dict:
     }
 
 
+def compute_trade_alpha(pos: dict, exit_price: float, spy_closes: dict) -> float | None:
+    """Alpha vs. SPY over the position's actual [entry_date, exit_date] window —
+    None if benchmark data is unavailable for that window."""
+    entry_date = pos["first_buy_date"]
+    exit_date = date.fromisoformat(pos["exit_ts"][:10]) if (not pos["is_open"] and pos["exit_ts"]) else date.today()
+    return alpha_pct(pos["avg_entry"], exit_price, spy_closes, entry_date, exit_date)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 7: Scenario evaluation
 # ─────────────────────────────────────────────────────────────────────────────
@@ -299,7 +308,7 @@ def scale_deployed_to_reduced_size(deployed: float) -> float:
 # STEP 8: Run all scenarios
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_scenarios(positions: list, current_prices: dict, sma_map: dict):
+def run_scenarios(positions: list, current_prices: dict, sma_map: dict, spy_closes: dict):
     """
     For each scenario, compute aggregate metrics.
     Returns dict: scenario_id → metrics dict.
@@ -352,6 +361,7 @@ def run_scenarios(positions: list, current_prices: dict, sma_map: dict):
             pnl_data  = compute_pnl(pos, current_prices)
             raw_pnl   = pnl_data["pnl"]
             raw_deployed = pnl_data["deployed"]
+            alpha     = compute_trade_alpha(pos, pnl_data["exit_price"], spy_closes)
 
             if size_scaled:
                 pnl      = scale_pnl_to_reduced_size(pos, raw_pnl)
@@ -381,6 +391,7 @@ def run_scenarios(positions: list, current_prices: dict, sma_map: dict):
                 "avg_entry":  pos["avg_entry"],
                 "sma":       sma_map.get(sym),
                 "tx_age":    get_tx_age_days(sym, pos["first_buy_date"]),
+                "alpha_pct": alpha,
             })
 
         n_trades  = len(trades_included)
@@ -388,6 +399,7 @@ def run_scenarios(positions: list, current_prices: dict, sma_map: dict):
         win_rate  = (wins / n_trades * 100) if n_trades > 0 else 0
         avg_win   = sum(win_amounts) / len(win_amounts) if win_amounts else 0
         avg_loss  = sum(loss_amounts) / len(loss_amounts) if loss_amounts else 0
+        alpha_summary = summarize_alpha([t["alpha_pct"] for t in trades_included if t["alpha_pct"] is not None])
 
         results[scen_id] = {
             "n_trades":         n_trades,
@@ -399,6 +411,8 @@ def run_scenarios(positions: list, current_prices: dict, sma_map: dict):
             "avg_loss":         avg_loss,
             "trades_included":  trades_included,
             "trades_excluded":  trades_excluded,
+            "avg_alpha_pct":    alpha_summary["avg_alpha_pct"],
+            "pct_positive_alpha": alpha_summary["pct_positive_alpha"],
         }
 
     return results
@@ -414,16 +428,20 @@ def print_header(title: str):
     print(f"{'═' * 90}")
 
 
-def print_scenario_table(scenario_results: dict):
+def print_scenario_table(scenario_results: dict, spy_window_return: float | None):
     print_header("SCENARIO COMPARISON TABLE")
-    print(f"\n{'Scenario':<35} {'Trades':>7} {'Deployed':>12} {'PnL $':>10} {'ROI %':>7} {'Win%':>7} {'Avg Win':>9} {'Avg Loss':>10}")
-    print(f"{'─' * 35} {'─'*7} {'─'*12} {'─'*10} {'─'*7} {'─'*7} {'─'*9} {'─'*10}")
+    if spy_window_return is not None:
+        print(f"\n  SPY over the same window: {spy_window_return:+.1f}% — Alpha% below is return net of this, not raw stock return.")
+        print(f"  A strategy can show positive PnL/ROI here purely from market beta while still having negative alpha (no real edge).")
+    print(f"\n{'Scenario':<35} {'Trades':>7} {'Deployed':>12} {'PnL $':>10} {'ROI %':>7} {'Win%':>7} {'Avg Win':>9} {'Avg Loss':>10} {'Alpha%':>8}")
+    print(f"{'─' * 35} {'─'*7} {'─'*12} {'─'*10} {'─'*7} {'─'*7} {'─'*9} {'─'*10} {'─'*8}")
 
     for scen_id in range(5):
         r    = scenario_results[scen_id]
         name = SCENARIO_NAMES[scen_id]
         avg_win_str  = f"${r['avg_win']:>8,.0f}" if r['avg_win'] != 0 else "      N/A"
         avg_loss_str = f"${r['avg_loss']:>8,.0f}" if r['avg_loss'] != 0 else "      N/A"
+        alpha_str = f"{r['avg_alpha_pct']:>+6.1f}%" if r['avg_alpha_pct'] is not None else "    N/A"
         print(
             f"{name:<35} "
             f"{r['n_trades']:>7} "
@@ -432,7 +450,8 @@ def print_scenario_table(scenario_results: dict):
             f"{r['roi']:>+6.1f}% "
             f"{r['win_rate']:>6.0f}% "
             f"  {avg_win_str} "
-            f"  {avg_loss_str}"
+            f"  {avg_loss_str} "
+            f"  {alpha_str}"
         )
 
 
@@ -442,8 +461,8 @@ def print_ticker_breakdown(positions: list, scenario_results: dict, sma_map: dic
     # Build a quick lookup for scenario 0 PnL per ticker
     base = {t["symbol"]: t for t in scenario_results[0]["trades_included"]}
 
-    print(f"\n{'Ticker':<6} {'Entry':>8} {'Exit':>8} {'Qty':>6} {'PnL $':>9} {'ROI%':>6} {'txAge':>6} {'SMA':>8} {'S1':>4} {'S3':>4} {'Status'}")
-    print(f"{'─'*6} {'─'*8} {'─'*8} {'─'*6} {'─'*9} {'─'*6} {'─'*6} {'─'*8} {'─'*4} {'─'*4} {'─'*12}")
+    print(f"\n{'Ticker':<6} {'Entry':>8} {'Exit':>8} {'Qty':>6} {'PnL $':>9} {'ROI%':>6} {'Alpha%':>7} {'txAge':>6} {'SMA':>8} {'S1':>4} {'S3':>4} {'Status'}")
+    print(f"{'─'*6} {'─'*8} {'─'*8} {'─'*6} {'─'*9} {'─'*6} {'─'*7} {'─'*6} {'─'*8} {'─'*4} {'─'*4} {'─'*12}")
 
     # Sort by PnL descending
     sorted_pos = sorted(positions, key=lambda p: base.get(p["symbol"], {}).get("pnl", 0), reverse=True)
@@ -466,16 +485,19 @@ def print_ticker_breakdown(positions: list, scenario_results: dict, sma_map: dic
             pnl    = t_info["pnl"]
             exit_p = t_info["exit_price"]
             roi    = (pnl / (entry * qty) * 100) if (entry * qty) > 0 else 0
+            alpha  = t_info["alpha_pct"]
         else:
             pnl    = 0
             exit_p = 0
             roi    = 0
+            alpha  = None
 
         status   = "OPEN" if is_open else "CLOSED"
         s1_str   = "FILT" if s1_filtered else "KEEP"
         s3_str   = "FILT" if s3_filtered else "KEEP"
         sma_str  = f"${sma:>7.2f}" if sma else "   N/A  "
         exit_str = f"${exit_p:>7.2f}" if exit_p else "   N/A  "
+        alpha_str = f"{alpha:>+6.1f}%" if alpha is not None else "    N/A"
 
         print(
             f"{sym:<6} "
@@ -484,6 +506,7 @@ def print_ticker_breakdown(positions: list, scenario_results: dict, sma_map: dic
             f"{qty:>6.0f} "
             f"${pnl:>+8,.0f} "
             f"{roi:>+5.1f}% "
+            f"{alpha_str} "
             f"{tx_age:>6}d "
             f"{sma_str} "
             f"{s1_str:>4} "
@@ -586,12 +609,19 @@ def main():
         else:
             print("SMA=N/A (keep)")
 
+    # Fetch SPY benchmark once for the whole window — alpha needs this to tell
+    # real stock-picking edge apart from just riding the market's own drift.
+    print("\n  Fetching SPY benchmark for alpha calculation...")
+    window_start = min(pos["first_buy_date"] for pos in positions)
+    spy_closes = fetch_benchmark_closes(window_start, date.today())
+    spy_window_return = benchmark_return_pct(spy_closes, window_start, date.today())
+
     # Run all scenarios
     print("\n  Running scenario analysis...")
-    scenario_results = run_scenarios(positions, current_prices, sma_map)
+    scenario_results = run_scenarios(positions, current_prices, sma_map, spy_closes)
 
     # Print results
-    print_scenario_table(scenario_results)
+    print_scenario_table(scenario_results, spy_window_return)
     print_ticker_breakdown(positions, scenario_results, sma_map)
     print_filtered_trades(scenario_results)
     print_summary_insight(scenario_results)
@@ -600,6 +630,9 @@ def main():
     print(f"  NOTE: Open positions (marked OPEN) use current market price for unrealized PnL.")
     print(f"  NOTE: txAge = 0 means txDate unknown, assumed fresh (conservative).")
     print(f"  NOTE: Scenario 2 scales PnL by 0.03/0.06 (3%/6% default pos size).")
+    print(f"  NOTE: Alpha% = stock return minus SPY return over the same holding window.")
+    print(f"        Positive PnL with negative/near-zero alpha means market beta, not stock-picking edge —")
+    print(f"        don't conclude a filter/config is 'working' from PnL/win-rate alone, check alpha too.")
     print(f"{'═' * 90}\n")
 
 

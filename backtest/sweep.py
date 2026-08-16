@@ -22,6 +22,7 @@ from backtest.wheel_replay import simulate_wheel_cycle
 from backtest.buckets import bucket_by_month, worst_bucket_pnl, all_buckets_positive
 from backtest.signals import filter_signals, fetch_historical_insider_signals
 from backtest.trend import prefetch_sma_bars, sma_as_of
+from backtest.benchmark import fetch_benchmark_closes, alpha_pct, summarize_alpha
 
 SETTINGS_FILE = Path(__file__).parent.parent / "config" / "settings.json"
 
@@ -108,7 +109,7 @@ def _prefetch_bars(keys: list[tuple[str, date]], days_forward: int = 180) -> dic
 
 # ── Per-evidence-source scoring ───────────────────────────────────────────────
 
-def _score_trailing_stop(positions: list[dict], bars_cache: dict, ts_cfg: dict, position_size_usd: float, min_entry_price: float = 0, sma_bars_cache: dict | None = None, trend_filter_sma_days: int = 0) -> dict:
+def _score_trailing_stop(positions: list[dict], bars_cache: dict, ts_cfg: dict, position_size_usd: float, min_entry_price: float = 0, sma_bars_cache: dict | None = None, trend_filter_sma_days: int = 0, spy_closes: dict | None = None) -> dict:
     records = []
     for pos in positions:
         symbol, start = pos["symbol"], pos["first_buy_date"]
@@ -125,21 +126,25 @@ def _score_trailing_stop(positions: list[dict], bars_cache: dict, ts_cfg: dict, 
         result = simulate_trailing_stop(symbol, start, entry_price, ts_cfg, position_size_usd, bars=bars)
         if result is None:
             continue
+        alpha = alpha_pct(entry_price, result["exit_price"], spy_closes, start, result["exit_date"]) if spy_closes else None
         records.append({
             "symbol": symbol, "pnl": result["pnl_usd"], "exit_date": result["exit_date"],
-            "exit_reason": result["exit_reason"], "is_open": result["is_open"],
+            "exit_reason": result["exit_reason"], "is_open": result["is_open"], "alpha_pct": alpha,
         })
     buckets = bucket_by_month(records, "exit_date")
+    alpha_summary = summarize_alpha([r["alpha_pct"] for r in records if r["alpha_pct"] is not None])
     return {
         "records": records, "buckets": buckets,
         "worst_month_pnl": worst_bucket_pnl(buckets),
         "total_pnl": sum(r["pnl"] for r in records),
         "n_trades": len(records),
         "all_positive": all_buckets_positive(buckets),
+        "avg_alpha_pct": alpha_summary["avg_alpha_pct"],
+        "pct_positive_alpha": alpha_summary["pct_positive_alpha"],
     }
 
 
-def _score_edgar_replay(signals_raw, bars_cache, ts_cfg, position_size_usd, min_transaction_value, require_high_conviction, min_entry_price: float = 0, sma_bars_cache: dict | None = None, trend_filter_sma_days: int = 0) -> dict | None:
+def _score_edgar_replay(signals_raw, bars_cache, ts_cfg, position_size_usd, min_transaction_value, require_high_conviction, min_entry_price: float = 0, sma_bars_cache: dict | None = None, trend_filter_sma_days: int = 0, spy_closes: dict | None = None) -> dict | None:
     if not signals_raw:
         return None
     filtered = filter_signals(signals_raw, min_transaction_value, require_high_conviction)
@@ -171,11 +176,13 @@ def _score_edgar_replay(signals_raw, bars_cache, ts_cfg, position_size_usd, min_
         result = simulate_trailing_stop(symbol, entry_date, entry_price, ts_cfg, position_size_usd, bars=bars)
         if result is None:
             continue
+        alpha = alpha_pct(entry_price, result["exit_price"], spy_closes, entry_date, result["exit_date"]) if spy_closes else None
         records.append({
             "symbol": symbol, "pnl": result["pnl_usd"], "exit_date": result["exit_date"],
-            "exit_reason": result["exit_reason"], "is_open": result["is_open"],
+            "exit_reason": result["exit_reason"], "is_open": result["is_open"], "alpha_pct": alpha,
         })
     buckets = bucket_by_month(records, "exit_date")
+    alpha_summary = summarize_alpha([r["alpha_pct"] for r in records if r["alpha_pct"] is not None])
     return {
         "records": records, "buckets": buckets,
         "worst_month_pnl": worst_bucket_pnl(buckets),
@@ -183,6 +190,8 @@ def _score_edgar_replay(signals_raw, bars_cache, ts_cfg, position_size_usd, min_
         "n_trades": len(records),
         "all_positive": all_buckets_positive(buckets),
         "n_filtered_from": len(signals_raw),
+        "avg_alpha_pct": alpha_summary["avg_alpha_pct"],
+        "pct_positive_alpha": alpha_summary["pct_positive_alpha"],
     }
 
 
@@ -246,19 +255,27 @@ def run_sweep(
     wheel_universe = list({(p["symbol"], p["first_buy_date"]) for p in positions})
     wheel_bars_cache = _prefetch_bars(wheel_universe, days_forward=120)
 
+    # SPY benchmark, fetched once and reused across every candidate — alpha vs.
+    # the market is what tells "the strategy has edge" apart from "the market
+    # went up and dragged positions with it" (see backtest/benchmark.py).
+    alpha_window_keys = [p["first_buy_date"] for p in positions] + [k[1] for k in sma_keys]
+    spy_closes = None
+    if alpha_window_keys:
+        spy_closes = fetch_benchmark_closes(min(alpha_window_keys), date.today())
+
     def evaluate(candidate: dict) -> dict:
         ts_cfg, wheel_cfg, pos_size = candidate_to_cfgs(candidate)
         min_entry_price = candidate["min_entry_price"]
         trend_filter_sma_days = candidate["trend_filter_sma_days"]
         real_result = _score_trailing_stop(
             positions, bars_cache, ts_cfg, pos_size, min_entry_price,
-            sma_bars_cache, trend_filter_sma_days,
+            sma_bars_cache, trend_filter_sma_days, spy_closes,
         )
         edgar_result = _score_edgar_replay(
             signals_raw, edgar_bars_cache, ts_cfg, pos_size,
             candidate["sec_insiders.min_transaction_value"],
             candidate["sec_insiders.require_high_conviction"],
-            min_entry_price, sma_bars_cache, trend_filter_sma_days,
+            min_entry_price, sma_bars_cache, trend_filter_sma_days, spy_closes,
         )
         wheel_result = _score_wheel(wheel_universe, wheel_bars_cache, wheel_cfg)
 
