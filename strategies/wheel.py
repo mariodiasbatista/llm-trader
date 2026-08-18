@@ -18,7 +18,7 @@ from alpaca.trading.enums import OrderSide
 
 from core.alpaca import (
     submit_option_order, close_option_position, get_latest_price,
-    get_option_mid_price, get_position, get_open_orders,
+    get_option_mid_price, get_position, get_open_orders, find_option_contract,
 )
 from core.logger import load_state, save_state, log_trade, log, state_lock
 
@@ -30,14 +30,6 @@ def _settings() -> dict:
         return json.load(f)["wheel"]
 
 
-def _occ_symbol(underlying: str, expiry: datetime, option_type: str, strike: float) -> str:
-    """Build OCC option symbol e.g. AAPL240315C00150000"""
-    exp = expiry.strftime("%y%m%d")
-    cp = "C" if option_type == "call" else "P"
-    strike_str = f"{int(strike * 1000):08d}"
-    return f"{underlying}{exp}{cp}{strike_str}"
-
-
 def _next_expiry(weeks_out: int = 2) -> datetime:
     today = datetime.now()
     days_to_friday = (4 - today.weekday()) % 7 or 7
@@ -45,11 +37,16 @@ def _next_expiry(weeks_out: int = 2) -> datetime:
 
 
 def _sell_put(symbol: str, cfg: dict, contracts: int) -> dict | None:
-    """Sell a cash-secured put and return the resulting wheel-state dict, or None if quote unavailable."""
+    """Sell a cash-secured put and return the resulting wheel-state dict, or None if no listed contract/quote."""
     price = get_latest_price(symbol)
-    put_strike = round(price * (1 - cfg.get("put_otm_pct", 0.05)))
-    expiry = _next_expiry(cfg.get("weeks_to_expiry", 2))
-    option_sym = _occ_symbol(symbol, expiry, "put", put_strike)
+    target_strike = price * (1 - cfg.get("put_otm_pct", 0.05))
+    target_expiry = _next_expiry(cfg.get("weeks_to_expiry", 2))
+
+    found = find_option_contract(symbol, target_expiry, "put", target_strike)
+    if found is None:
+        log.warning(f"[{symbol}] No listed put contract found near strike ${target_strike:.2f} / expiry ~{target_expiry.date()}, skipping")
+        return None
+    option_sym, put_strike, expiry_date = found
 
     premium = get_option_mid_price(option_sym)
     if premium <= 0:
@@ -73,16 +70,21 @@ def _sell_put(symbol: str, cfg: dict, contracts: int) -> dict | None:
         "put_strike": put_strike,
         "option_symbol": option_sym,
         "premium_collected": fill_price,
-        "expiry": expiry.strftime("%Y-%m-%d"),
+        "expiry": expiry_date.strftime("%Y-%m-%d") if hasattr(expiry_date, "strftime") else str(expiry_date),
         "started": datetime.now().isoformat(),
     }
 
 
 def _sell_call(symbol: str, cfg: dict, contracts: int, price: float) -> dict | None:
-    """Sell a covered call and return the resulting wheel-state dict, or None if quote unavailable."""
-    call_strike = round(price * (1 + cfg.get("call_otm_pct", 0.05)))
-    expiry = _next_expiry(cfg.get("weeks_to_expiry", 2))
-    option_sym = _occ_symbol(symbol, expiry, "call", call_strike)
+    """Sell a covered call and return the resulting wheel-state dict, or None if no listed contract/quote."""
+    target_strike = price * (1 + cfg.get("call_otm_pct", 0.05))
+    target_expiry = _next_expiry(cfg.get("weeks_to_expiry", 2))
+
+    found = find_option_contract(symbol, target_expiry, "call", target_strike)
+    if found is None:
+        log.warning(f"[{symbol}] No listed call contract found near strike ${target_strike:.2f} / expiry ~{target_expiry.date()}, skipping")
+        return None
+    option_sym, call_strike, expiry_date = found
 
     premium = get_option_mid_price(option_sym)
     if premium <= 0:
@@ -106,7 +108,7 @@ def _sell_call(symbol: str, cfg: dict, contracts: int, price: float) -> dict | N
         "call_strike": call_strike,
         "option_symbol": option_sym,
         "premium_collected": fill_price,
-        "expiry": expiry.strftime("%Y-%m-%d"),
+        "expiry": expiry_date.strftime("%Y-%m-%d") if hasattr(expiry_date, "strftime") else str(expiry_date),
         "started": datetime.now().isoformat(),
     }
 

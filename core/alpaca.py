@@ -22,8 +22,9 @@ from alpaca.trading.requests import (
     MarketOrderRequest,
     TrailingStopOrderRequest,
     GetOrdersRequest,
+    GetOptionContractsRequest,
 )
-from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
+from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus, ContractType
 from alpaca.data.historical import StockHistoricalDataClient, OptionHistoricalDataClient
 from alpaca.data.requests import (
     StockLatestQuoteRequest,
@@ -205,6 +206,46 @@ def close_option_position(option_symbol: str, qty: int):
     result = _wait_for_fill(_trading_client().submit_order(order))
     _debug(f"[alpaca] option close submitted id={result.id} status={result.status} filled_avg_price={result.filled_avg_price}")
     return result
+
+
+def find_option_contract(symbol: str, target_expiry, option_type: str, target_strike: float, days_tolerance: int = 21):
+    """
+    Find the real listed option contract nearest to (target_expiry, target_strike).
+
+    Naively rounding a target strike to the nearest whole dollar and guessing an
+    expiry Friday builds an OCC symbol that frequently doesn't correspond to any
+    actual listed contract — many underlyings only list strikes in $2.50/$5/$10
+    increments, and not every Friday is a valid expiration for every ticker.
+    Querying Alpaca's contract reference data and snapping to what's actually
+    listed avoids constructing a symbol for a contract that was never listed.
+
+    Returns (occ_symbol, strike, expiration_date) for the nearest real expiration
+    on/after target_expiry (within days_tolerance) and the strike closest to
+    target_strike within that expiration, or None if nothing is listed at all
+    in that window (e.g. the underlying has no options market).
+    """
+    target_date = target_expiry.date() if hasattr(target_expiry, "date") else target_expiry
+    req = GetOptionContractsRequest(
+        underlying_symbols=[symbol],
+        type=ContractType.PUT if option_type == "put" else ContractType.CALL,
+        expiration_date_gte=target_date.isoformat(),
+        expiration_date_lte=(target_date + timedelta(days=days_tolerance)).isoformat(),
+        limit=1000,
+    )
+    try:
+        resp = _trading_client().get_option_contracts(req)
+    except Exception as e:
+        _debug(f"[alpaca] option contract lookup failed for {symbol}: {e}")
+        return None
+
+    contracts = resp.option_contracts or []
+    if not contracts:
+        return None
+
+    nearest_expiry = min(c.expiration_date for c in contracts)
+    same_expiry = [c for c in contracts if c.expiration_date == nearest_expiry]
+    best = min(same_expiry, key=lambda c: abs(float(c.strike_price) - target_strike))
+    return best.symbol, float(best.strike_price), nearest_expiry
 
 
 def get_option_mid_price(option_symbol: str) -> float:

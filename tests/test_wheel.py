@@ -1,6 +1,13 @@
 """Tests for strategies/wheel.py — zero-premium guards, missing-state-key guards."""
 import pytest
+from datetime import date
 from unittest.mock import patch, MagicMock
+
+# find_option_contract now does a real Alpaca lookup before _sell_put/_sell_call
+# construct an order — every test that reaches that code path mocks it with one
+# of these so the suite stays offline instead of hitting the real API.
+FAKE_PUT_CONTRACT = ("AAPL260620P00095000", 95.0, date(2026, 6, 20))
+FAKE_CALL_CONTRACT = ("NVDA260620C00105000", 105.0, date(2026, 6, 20))
 
 
 WHEEL_SETTINGS = {
@@ -36,28 +43,31 @@ def _wheel_state(symbol, stage):
 class TestStartWheelZeroPremium:
     """start_wheel returns {} and submits no order when the option premium quote is 0."""
 
+    @patch("strategies.wheel.find_option_contract", return_value=FAKE_PUT_CONTRACT)
     @patch("strategies.wheel.save_state")
     @patch("strategies.wheel.load_state", side_effect=_base_state)
     @patch("strategies.wheel.submit_option_order")
     @patch("strategies.wheel.get_option_mid_price", return_value=0.0)
     @patch("strategies.wheel.get_latest_price", return_value=100.0)
     @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
-    def test_returns_empty_dict(self, mock_settings, mock_price, mock_premium, mock_submit, mock_load, mock_save):
+    def test_returns_empty_dict(self, mock_settings, mock_price, mock_premium, mock_submit, mock_load, mock_save, mock_contract):
         from strategies.wheel import start_wheel
         result = start_wheel("AAPL", contracts=1)
         assert result == {}
 
+    @patch("strategies.wheel.find_option_contract", return_value=FAKE_PUT_CONTRACT)
     @patch("strategies.wheel.save_state")
     @patch("strategies.wheel.load_state", side_effect=_base_state)
     @patch("strategies.wheel.submit_option_order")
     @patch("strategies.wheel.get_option_mid_price", return_value=0.0)
     @patch("strategies.wheel.get_latest_price", return_value=100.0)
     @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
-    def test_does_not_submit_order(self, mock_settings, mock_price, mock_premium, mock_submit, mock_load, mock_save):
+    def test_does_not_submit_order(self, mock_settings, mock_price, mock_premium, mock_submit, mock_load, mock_save, mock_contract):
         from strategies.wheel import start_wheel
         start_wheel("AAPL", contracts=1)
         mock_submit.assert_not_called()
 
+    @patch("strategies.wheel.find_option_contract", return_value=FAKE_PUT_CONTRACT)
     @patch("strategies.wheel.save_state")
     @patch("strategies.wheel.load_state", side_effect=_base_state)
     @patch("strategies.wheel.submit_option_order")
@@ -65,17 +75,18 @@ class TestStartWheelZeroPremium:
     @patch("strategies.wheel.get_option_mid_price", return_value=0.0)
     @patch("strategies.wheel.get_latest_price", return_value=100.0)
     @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
-    def test_does_not_log_trade(self, mock_settings, mock_price, mock_premium, mock_log, mock_submit, mock_load, mock_save):
+    def test_does_not_log_trade(self, mock_settings, mock_price, mock_premium, mock_log, mock_submit, mock_load, mock_save, mock_contract):
         from strategies.wheel import start_wheel
         start_wheel("AAPL", contracts=1)
         mock_log.assert_not_called()
 
+    @patch("strategies.wheel.find_option_contract", return_value=FAKE_PUT_CONTRACT)
     @patch("strategies.wheel.submit_option_order")
     @patch("strategies.wheel.log_trade")
     @patch("strategies.wheel.get_option_mid_price", return_value=1.50)
     @patch("strategies.wheel.get_latest_price", return_value=100.0)
     @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
-    def test_normal_premium_submits_order(self, mock_settings, mock_price, mock_premium, mock_log, mock_submit):
+    def test_normal_premium_submits_order(self, mock_settings, mock_price, mock_premium, mock_log, mock_submit, mock_contract):
         """Positive premium must still submit normally — guard doesn't over-block."""
         state = {"positions": {}, "wheel": {}, "copied_trades": []}
         with patch("strategies.wheel.load_state", return_value=state), \
@@ -90,12 +101,13 @@ class TestStartWheelZeroPremium:
 class TestStartWheelMissingWheelKey:
     """start_wheel creates the 'wheel' key if it's absent from state.json."""
 
+    @patch("strategies.wheel.find_option_contract", return_value=FAKE_PUT_CONTRACT)
     @patch("strategies.wheel.submit_option_order")
     @patch("strategies.wheel.log_trade")
     @patch("strategies.wheel.get_option_mid_price", return_value=1.50)
     @patch("strategies.wheel.get_latest_price", return_value=100.0)
     @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
-    def test_creates_wheel_key_in_state(self, mock_settings, mock_price, mock_premium, mock_log, mock_submit):
+    def test_creates_wheel_key_in_state(self, mock_settings, mock_price, mock_premium, mock_log, mock_submit, mock_contract):
         state_without_wheel = {"positions": {}, "copied_trades": []}
         with patch("strategies.wheel.load_state", return_value=state_without_wheel), \
              patch("strategies.wheel.save_state") as mock_save:
@@ -152,12 +164,13 @@ class TestCheckManageMissingExpiry:
 class TestCheckManageZeroPremium:
     """check_and_manage skips stage transitions when option premium is 0."""
 
+    @patch("strategies.wheel.find_option_contract", return_value=FAKE_CALL_CONTRACT)
     @patch("strategies.wheel.save_state")
     @patch("strategies.wheel.submit_option_order")
     @patch("strategies.wheel.get_option_mid_price", return_value=0.0)
     @patch("strategies.wheel.get_latest_price", return_value=100.0)
     @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
-    def test_stage1_zero_call_premium_skips_transition(self, mock_settings, mock_price, mock_premium, mock_submit, mock_save):
+    def test_stage1_zero_call_premium_skips_transition(self, mock_settings, mock_price, mock_premium, mock_submit, mock_save, mock_contract):
         """Stage 1 → 2: if call premium is 0, no order submitted and stage unchanged."""
         # 200 shares = put was assigned, should trigger stage 1 → 2
         mock_pos = MagicMock()
@@ -172,12 +185,13 @@ class TestCheckManageZeroPremium:
         mock_submit.assert_not_called()
         assert result["actions"] == []
 
+    @patch("strategies.wheel.find_option_contract", return_value=FAKE_PUT_CONTRACT)
     @patch("strategies.wheel.save_state")
     @patch("strategies.wheel.submit_option_order")
     @patch("strategies.wheel.get_option_mid_price", return_value=0.0)
     @patch("strategies.wheel.get_latest_price", return_value=100.0)
     @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
-    def test_stage2_zero_put_premium_skips_transition(self, mock_settings, mock_price, mock_premium, mock_submit, mock_save):
+    def test_stage2_zero_put_premium_skips_transition(self, mock_settings, mock_price, mock_premium, mock_submit, mock_save, mock_contract):
         """Stage 2 → 1: if put premium is 0, no order submitted."""
         # None position = shares called away, should trigger stage 2 → 1
         state = _wheel_state("NVDA", stage=2)
@@ -190,13 +204,14 @@ class TestCheckManageZeroPremium:
         mock_submit.assert_not_called()
         assert result["actions"] == []
 
+    @patch("strategies.wheel.find_option_contract", return_value=FAKE_CALL_CONTRACT)
     @patch("strategies.wheel.save_state")
     @patch("strategies.wheel.log_trade")
     @patch("strategies.wheel.submit_option_order")
     @patch("strategies.wheel.get_option_mid_price", return_value=2.50)
     @patch("strategies.wheel.get_latest_price", return_value=100.0)
     @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
-    def test_stage1_positive_premium_submits_call(self, mock_settings, mock_price, mock_premium, mock_submit, mock_log, mock_save):
+    def test_stage1_positive_premium_submits_call(self, mock_settings, mock_price, mock_premium, mock_submit, mock_log, mock_save, mock_contract):
         """Positive premium in stage 1 → 2 still submits the call order."""
         mock_pos = MagicMock()
         mock_pos.qty = "200"
@@ -232,6 +247,7 @@ class TestCheckManageDisabled:
 # ── check_and_manage: stage 2→1 success path ─────────────────────────────────
 
 class TestCheckManageStage2Success:
+    @patch("strategies.wheel.find_option_contract", return_value=FAKE_PUT_CONTRACT)
     @patch("strategies.wheel.save_state")
     @patch("strategies.wheel.log_trade")
     @patch("strategies.wheel.submit_option_order")
@@ -239,7 +255,7 @@ class TestCheckManageStage2Success:
     @patch("strategies.wheel.get_latest_price", return_value=100.0)
     @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
     def test_stage2_positive_premium_submits_put(
-        self, mock_settings, mock_price, mock_premium, mock_submit, mock_log, mock_save
+        self, mock_settings, mock_price, mock_premium, mock_submit, mock_log, mock_save, mock_contract
     ):
         """Stage 2 → 1 with a positive premium submits the put and logs the trade."""
         state = _wheel_state("NVDA", stage=2)
@@ -253,6 +269,7 @@ class TestCheckManageStage2Success:
         assert len(result["actions"]) == 1
         assert "Stage 2→1" in result["actions"][0]
 
+    @patch("strategies.wheel.find_option_contract", return_value=FAKE_PUT_CONTRACT)
     @patch("strategies.wheel.save_state")
     @patch("strategies.wheel.log_trade")
     @patch("strategies.wheel.submit_option_order")
@@ -260,7 +277,7 @@ class TestCheckManageStage2Success:
     @patch("strategies.wheel.get_latest_price", return_value=100.0)
     @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
     def test_stage2_updates_wheel_state_to_stage1(
-        self, mock_settings, mock_price, mock_premium, mock_submit, mock_log, mock_save
+        self, mock_settings, mock_price, mock_premium, mock_submit, mock_log, mock_save, mock_contract
     ):
         """After a successful stage 2 → 1 transition, state records stage=1."""
         state = _wheel_state("NVDA", stage=2)
@@ -276,13 +293,14 @@ class TestCheckManageStage2Success:
 # ── check_and_manage: exception handling ─────────────────────────────────────
 
 class TestCheckManageExceptions:
+    @patch("strategies.wheel.find_option_contract", return_value=FAKE_CALL_CONTRACT)
     @patch("strategies.wheel.save_state")
     @patch("strategies.wheel.submit_option_order", side_effect=RuntimeError("API error"))
     @patch("strategies.wheel.get_option_mid_price", return_value=2.0)
     @patch("strategies.wheel.get_latest_price", return_value=100.0)
     @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
     def test_stage1_exception_does_not_crash(
-        self, mock_settings, mock_price, mock_premium, mock_submit, mock_save
+        self, mock_settings, mock_price, mock_premium, mock_submit, mock_save, mock_contract
     ):
         """submit_option_order failure in stage 1 is caught; loop continues."""
         mock_pos = MagicMock()
@@ -295,13 +313,14 @@ class TestCheckManageExceptions:
 
         assert result["actions"] == []
 
+    @patch("strategies.wheel.find_option_contract", return_value=FAKE_PUT_CONTRACT)
     @patch("strategies.wheel.save_state")
     @patch("strategies.wheel.submit_option_order", side_effect=RuntimeError("API error"))
     @patch("strategies.wheel.get_option_mid_price", return_value=2.0)
     @patch("strategies.wheel.get_latest_price", return_value=100.0)
     @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
     def test_stage2_exception_does_not_crash(
-        self, mock_settings, mock_price, mock_premium, mock_submit, mock_save
+        self, mock_settings, mock_price, mock_premium, mock_submit, mock_save, mock_contract
     ):
         """submit_option_order failure in stage 2 is caught; loop continues."""
         state = _wheel_state("NVDA", stage=2)
