@@ -82,7 +82,16 @@ scripts/
   analyze_and_trade.py     ← Main AI pipeline
   insider_report.py        ← Raw SEC Form 4 signal preview (no AI)
   strategy_performance.py  ← P&L comparison report
-tests/                     ← 326 unit tests (pytest)
+  backtest.py               ← 4-scenario comparison vs. actual trade history, with Alpha% vs SPY
+  weekly_ai_review.sh       ← cron entry point for the autonomous weekly strategy review (see below)
+backtest/
+  benchmark.py              ← SPY alpha calc — is a config "profitable" for real, or just riding the market?
+  real_trades.py            ← parses logs/trades.log into per-ticker position records
+  replay.py                 ← replays TRAILING_STOP against historical daily bars (shares live evaluate_position())
+  sweep.py                  ← coordinate-descent parameter sweep, scored on worst-month P&L (+ alpha)
+  edge_search.py             ← replays SEC EDGAR insider signals over a long window, bucketed by role/value/conviction
+  signals.py, trend.py, buckets.py, wheel_replay.py, report.py  ← supporting utilities
+tests/                     ← 336 unit tests (pytest)
 config/settings.json       ← All tunable parameters
 ```
 
@@ -116,6 +125,37 @@ Output: realized P&L, unrealized P&L, ROI %, and a head-to-head comparison betwe
 - Close contracts at 50% profit target
 - Repeats indefinitely (Stage 1 → 2 → 1 → ...)
 
+## Backtesting & Strategy Analysis
+
+```bash
+# 4-scenario comparison against real trade history (staleness filter, position
+# cap, trend filter, all combined) — reports P&L, win rate, and Alpha% vs SPY
+# for each, so you can tell real edge apart from just riding the market
+python scripts/backtest.py
+
+# Coordinate-descent parameter sweep over trailing-stop/wheel/filter settings,
+# scored on worst-month P&L against real trade history (+ SEC EDGAR replay)
+python -m backtest.sweep --iterations 200
+
+# Replay a longer window of SEC EDGAR insider signals than live trade history
+# alone gives you, bucketed by role/transaction-size/conviction/cluster-buying
+python3 << 'EOF'
+from datetime import date, timedelta
+from backtest.signals import fetch_historical_insider_signals
+from backtest.edge_search import tag_clusters, replay_signals, bucket_report
+
+signals = fetch_historical_insider_signals(date.today() - timedelta(days=270), date.today())
+tag_clusters(signals)
+print(bucket_report(replay_signals(signals)))
+EOF
+```
+
+`backtest/benchmark.py` fetches SPY's own return over the same window and computes Alpha% (stock return minus SPY return) per trade — raw $ P&L/win-rate alone can't tell whether a strategy has real edge or is just riding a rising market.
+
+## Weekly Autonomous Review
+
+`scripts/weekly_ai_review.sh` runs on a cron schedule: spins up a nested git worktree, re-analyzes the strategy against the objective of profitability, backtest-confirms any hypothesis before proposing a change, and opens a PR only if it finds a clear, backtest-confirmed loss to fix — most weeks it makes no changes, which is expected. Always checks Alpha% vs SPY, not just P&L, before recommending an exit-parameter change. A Telegram summary is sent every run regardless of outcome (`scripts/notify_weekly.py`).
+
 ## Tests
 
 ```bash
@@ -126,7 +166,7 @@ Output: realized P&L, unrealized P&L, ROI %, and a head-to-head comparison betwe
 .venv/bin/pytest tests/test_alpaca_connection.py -v
 ```
 
-326 unit tests, all mocked — no API calls in CI.
+336 unit tests, all mocked — no API calls in CI.
 
 ## Configuration
 

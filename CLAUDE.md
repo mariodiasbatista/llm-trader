@@ -59,13 +59,25 @@ scripts/
   smart_money_report.py    # Raw disclosure viewer (no AI)
   setup_wheel.py           # Interactive wheel starter
   daily_summary.py         # EOD report
+  backtest.py              # 4-scenario comparison vs. actual trade history, with Alpha% vs SPY
+  weekly_ai_review.sh       # cron entry point for the autonomous weekly strategy review
+  notify_weekly.py          # Telegram summary sender for the weekly review
 scheduler/
   market_scheduler.py      # NYSE-hours-only scheduler
+backtest/
+  benchmark.py              # SPY alpha calc — real edge vs. just riding the market
+  real_trades.py            # parses logs/trades.log into per-ticker position records
+  replay.py                 # replays TRAILING_STOP against historical bars (shares live evaluate_position())
+  sweep.py                  # coordinate-descent parameter sweep, scored on worst-month P&L (+ alpha)
+  edge_search.py             # replays SEC EDGAR insider signals over a long window, bucketed by role/value/conviction
+  signals.py, trend.py, buckets.py, wheel_replay.py, report.py  # supporting utilities
 logs/
   state.json               # Live strategy state (floors, HWMs, wheel stages) — gitignored
   trades.log               # Append-only JSON trade journal — gitignored
   bot.log                  # Operational logs — gitignored
 ```
+
+**Note:** the AI Decision Layer, Capitol Trades Data, and config-table sections below still describe the pre-migration architecture (Capitol Trades as primary signal source). The live system has since migrated to SEC EDGAR Form 4 insider filings (`strategies/sec_insiders.py`) as the primary signal — see `README.md`'s "How It Works" and "Configuration" sections for the current, accurate picture. This section hasn't been reconciled with that migration yet.
 
 ## AI Decision Layer (`agents/claude_advisor.py`)
 
