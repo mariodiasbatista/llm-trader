@@ -1,11 +1,21 @@
 {
   "trailing_stop": {
     "enabled": true,
-    "initial_stop_pct": 0.08,
-    "trailing_pct": 0.08,
+    "initial_stop_pct": 0.15,
+    "trailing_pct": 0.15,
     "take_profit_pct": 0.12,
     "profit_target_pct": 0.03,
     "trailing_pct_from_profit": 0.05,
+    "adaptive_take_profit": {
+      "enabled": true,
+      "keep_flat_reach_pct": 50,
+      "target_reach_probability": 0.7,
+      "lookback_days": 400,
+      "horizon_days": 20,
+      "min_windows": 40,
+      "tp_min": 0.03,
+      "tp_max": 0.6
+    },
     "ladder_buys": [
       {
         "drop_pct": 0.2,

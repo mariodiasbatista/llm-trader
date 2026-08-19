@@ -7,14 +7,15 @@ Phase 2 — Trailing Stop Strategy
 - Laddered buys: auto-purchases more shares on steep dips
 """
 import json
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from alpaca.trading.enums import AssetClass
 
-from core.alpaca import get_positions, get_latest_price, close_position, market_buy, get_account
+from core.alpaca import get_positions, get_latest_price, close_position, market_buy, get_account, get_bars_range
 from core.logger import load_state, save_state, log_trade, log, state_lock
 from core.notifier import is_configured as telegram_configured, send_insufficient_funds_alert
+from strategies.exit_levels import mfe_distribution, resolve_take_profit
 
 SETTINGS_FILE = Path(__file__).parent.parent / "config" / "settings.json"
 
@@ -22,6 +23,65 @@ SETTINGS_FILE = Path(__file__).parent.parent / "config" / "settings.json"
 def _settings() -> dict:
     with open(SETTINGS_FILE) as f:
         return json.load(f)["trailing_stop"]
+
+
+def _adaptive_take_profit(symbol: str, cfg: dict) -> float | None:
+    """
+    Per-stock take-profit derived from `symbol`'s own price history — see
+    strategies/exit_levels.py for why a flat target is the wrong shape.
+
+    Returns None (caller falls back to the flat configured value) when the
+    feature is off, history is too thin, or the data fetch fails — a bad or
+    missing quote must never silently produce a nonsense exit level.
+    """
+    acfg = cfg.get("adaptive_take_profit", {})
+    if not acfg.get("enabled", False):
+        return None
+    # End the window a day back, not at now(): this account's data plan rejects
+    # requests touching recent SIP data ("subscription does not permit querying
+    # recent SIP data"), which is why get_bars(days=N) 403s here. Yesterday's
+    # close is also the right cutoff conceptually — the target is derived from
+    # history strictly before the position exists.
+    end = date.today() - timedelta(days=1)
+    start = end - timedelta(days=acfg.get("lookback_days", 400))
+    try:
+        bars = get_bars_range(symbol, start, end)
+    except Exception as e:
+        log.warning(f"[{symbol}] Adaptive take-profit: bar fetch failed ({e}) — using flat target")
+        return None
+    dist = mfe_distribution(bars, acfg.get("horizon_days", 20))
+    return resolve_take_profit(dist, cfg.get("take_profit_pct", 0.12), acfg)
+
+
+def _position_cfg(symbol: str, cfg: dict, ps: dict) -> dict:
+    """
+    Resolve this position's effective config, stamping the adaptive take-profit
+    into state on first sight and reusing it for the position's whole life.
+
+    Stamping matters: the derived level would otherwise drift every cycle as
+    new bars arrive, moving the exit target underneath an open position.
+
+    Positions already being tracked when this feature shipped have no stamp and
+    are deliberately left on the flat target — changing the target mid-trade
+    would have force-closed several open winners the moment it went live.
+    """
+    if "adaptive_tp" in ps:
+        return {**cfg, "take_profit_pct": ps["adaptive_tp"]}
+
+    if "high_water_mark" in ps:  # pre-existing position — leave it on the flat target
+        return cfg
+
+    tp = _adaptive_take_profit(symbol, cfg)
+    if tp is None:
+        return cfg
+    ps["adaptive_tp"] = tp
+    flat = cfg.get("take_profit_pct", 0.12)
+    log.info(
+        f"[{symbol}] Adaptive take-profit {tp:.1%}"
+        + (" (flat target is reachable, kept)" if abs(tp - flat) < 1e-9
+           else f" (flat {flat:.0%} unreachable for this stock)")
+    )
+    return {**cfg, "take_profit_pct": tp}
 
 
 def evaluate_position(cfg: dict, ps: dict, price: float, entry: float) -> list[dict]:
@@ -141,7 +201,8 @@ def check_and_update() -> dict:
                 state["positions"][symbol] = {"entry_price": entry}
             ps = state["positions"][symbol]
 
-            events = evaluate_position(cfg, ps, price, entry)
+            pos_cfg = _position_cfg(symbol, cfg, ps)
+            events = evaluate_position(pos_cfg, ps, price, entry)
 
             for ev in events:
                 if ev["type"] == "bootstrap":
@@ -183,7 +244,7 @@ def check_and_update() -> dict:
                     close_order = close_position(symbol)
                     fill_price = float(close_order.filled_avg_price) if close_order.filled_avg_price is not None else price
                     notes = (
-                        f"gain={ev['gain_pct']:.1%} target={cfg.get('take_profit_pct', 0):.0%}"
+                        f"gain={ev['gain_pct']:.1%} target={pos_cfg.get('take_profit_pct', 0):.1%}"
                         if action == "TAKE_PROFIT"
                         else f"floor={ev['floor']:.2f}"
                     )
