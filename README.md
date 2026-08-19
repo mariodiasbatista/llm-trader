@@ -70,6 +70,7 @@ agents/
   claude_advisor.py        ← Claude Opus 4.7 strategy selector (TRAILING_STOP / WHEEL / SKIP)
 strategies/
   trailing_stop.py         ← Trailing floor + laddered buys
+  exit_levels.py           ← Per-stock take-profit levels from realized price history (shared with backtest)
   wheel.py                 ← Cash-secured puts → covered calls cycle
   sec_insiders.py          ← SEC EDGAR Form 4 fetcher (primary signal source)
   smart_money.py           ← Capitol Trades API (legacy, kept for `smart-money` command)
@@ -91,7 +92,7 @@ backtest/
   sweep.py                  ← coordinate-descent parameter sweep, scored on worst-month P&L (+ alpha)
   edge_search.py             ← replays SEC EDGAR insider signals over a long window, bucketed by role/value/conviction
   signals.py, trend.py, buckets.py, wheel_replay.py, report.py  ← supporting utilities
-tests/                     ← 336 unit tests (pytest)
+tests/                     ← 355 unit tests (pytest)
 config/settings.json       ← All tunable parameters
 ```
 
@@ -114,8 +115,9 @@ Output: realized P&L, unrealized P&L, ROI %, and a head-to-head comparison betwe
 ## Strategies
 
 ### Trailing Stop (Phase 2)
-- Buys shares, sets a stop floor 10% below entry
-- Floor trails 8% below each new price high — locks in profits
+- Buys shares, sets a stop floor 15% below entry
+- Floor trails 15% below each new price high — locks in profits
+- **Adaptive take-profit**: the exit target is derived per stock rather than fixed. A flat 12% is unreachable for most names (only ~42% of positions historically touched +12% within 60 days), so the target keeps 12% only when that stock's own pre-purchase history reaches it in ≥50% of 20-day windows — otherwise it drops to the level the stock reaches 70% of the time. See `strategies/exit_levels.py`.
 - Laddered buys: adds 10 shares at -20% drop, 20 shares at -30%
 - Auto-sells entire position if price hits the floor
 
@@ -166,7 +168,7 @@ EOF
 .venv/bin/pytest tests/test_alpaca_connection.py -v
 ```
 
-336 unit tests, all mocked — no API calls in CI.
+355 unit tests, all mocked — no API calls in CI.
 
 ## Configuration
 
@@ -174,8 +176,13 @@ Edit `config/settings.json`:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `trailing_stop.initial_stop_pct` | 0.10 | First floor: 10% below entry |
-| `trailing_stop.trailing_pct` | 0.08 | Trail: 8% below running high |
+| `trailing_stop.initial_stop_pct` | 0.15 | First floor: 15% below entry |
+| `trailing_stop.trailing_pct` | 0.15 | Trail: 15% below running high |
+| `trailing_stop.take_profit_pct` | 0.12 | Flat target — kept only for stocks that actually reach it (see below) |
+| `trailing_stop.adaptive_take_profit.enabled` | true | Derive the take-profit per stock; `false` reverts to the flat `take_profit_pct` |
+| `trailing_stop.adaptive_take_profit.keep_flat_reach_pct` | 50 | Keep the flat target if the stock reached it in ≥ this % of historical windows |
+| `trailing_stop.adaptive_take_profit.target_reach_probability` | 0.7 | Otherwise target the level it reaches this often |
+| `trailing_stop.adaptive_take_profit.lookback_days` / `horizon_days` | 400 / 20 | History window, and the holding horizon the target is measured over |
 | `sec_insiders.min_transaction_value` | 100000 | Minimum $ value of an insider's open-market buy |
 | `sec_insiders.require_high_conviction` | true | Restrict to CEO/CFO/Director-tier roles |
 | `analyze.max_txdate_age_days` | 45 | Skip signals whose transaction date is older than this (legal filing deadline) |

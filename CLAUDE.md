@@ -49,6 +49,7 @@ core/
   logger.py                # Structured logging + JSON state persistence
 strategies/
   trailing_stop.py         # Trailing floor + laddered buys logic
+  exit_levels.py           # Per-stock take-profit from realized history (pure fns, shared with backtest)
   wheel.py                 # Cash-secured puts → covered calls → repeat
   smart_money.py           # Capitol Trades API — fetch politician disclosures
 scripts/
@@ -115,8 +116,10 @@ The goal is to accumulate enough trades to see which strategy Claude selects mos
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `trailing_stop.initial_stop_pct` | 0.10 | Floor starts 10% below entry |
-| `trailing_stop.trailing_pct` | 0.05 | Floor trails 5% below running highs |
+| `trailing_stop.initial_stop_pct` | 0.15 | Floor starts 15% below entry |
+| `trailing_stop.trailing_pct` | 0.15 | Floor trails 15% below running highs |
+| `trailing_stop.take_profit_pct` | 0.12 | Flat target — kept only for stocks whose history reaches it |
+| `trailing_stop.adaptive_take_profit.enabled` | true | Derive take-profit per stock (`strategies/exit_levels.py`); false = flat |
 | `trailing_stop.ladder_buys` | +10 @-20%, +20 @-30% | Auto-buy more on dips |
 | `wheel.enabled` | false | Requires options approval on Alpaca |
 | `wheel.put_otm_pct` | 0.05 | Sell put 5% below current price |
