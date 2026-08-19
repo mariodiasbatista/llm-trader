@@ -321,20 +321,43 @@ def _run_daily_summary():
         f"Day P&L:       {day_icon} ${day_pnl:>+,.2f}",
     ]
     if positions:
+        # Flag whichever position is nearest its take-profit target, so the next
+        # likely profitable exit is visible at a glance. Targets are per-stock
+        # (strategies/exit_levels.py), so "closest to target" is not the same as
+        # "biggest gain" — a +5% position can be further from its ceiling than a
+        # +2% one. Only in-profit positions qualify: a losing position drifting
+        # toward its target is not a pending profitable exit.
+        next_exit, best_gap = None, None
+        for p in positions:
+            ps = state.get("positions", {}).get(p.symbol, {})
+            tp = ps.get("adaptive_tp")
+            gain_pct = float(p.unrealized_plpc) * 100
+            if not tp or gain_pct <= 0:
+                continue
+            gap = tp * 100 - gain_pct
+            if gap >= 0 and (best_gap is None or gap < best_gap):
+                next_exit, best_gap = p.symbol, gap
+
         lines.append(f"\n📈 *Positions*")
         for p in positions:
-            floor = state.get("positions", {}).get(p.symbol, {}).get("stop_floor")
+            ps = state.get("positions", {}).get(p.symbol, {})
+            floor = ps.get("stop_floor")
+            tp = ps.get("adaptive_tp")
             total_pl = float(p.unrealized_pl)
             today_pl = float(p.unrealized_intraday_pl)
             total_pct = float(p.unrealized_plpc) * 100
             today_pct = float(p.unrealized_intraday_plpc) * 100
             total_icon = "🟢" if total_pl >= 0 else "🔴"
             floor_str = f"  Stop ${floor:.2f}" if floor else ""
+            target_str = f"  Target {tp*100:.1f}%" if tp else ""
+            flag = " 🎯" if p.symbol == next_exit else ""
             lines.append(
-                f"`{p.symbol}` {p.qty}sh @ ${float(p.avg_entry_price):.2f} → ${float(p.current_price):.2f}\n"
+                f"`{p.symbol}`{flag} {p.qty}sh @ ${float(p.avg_entry_price):.2f} → ${float(p.current_price):.2f}\n"
                 f"  {total_icon} Total ${total_pl:+,.2f} ({total_pct:+.1f}%)  "
-                f"Today ${today_pl:+,.2f} ({today_pct:+.1f}%){floor_str}"
+                f"Today ${today_pl:+,.2f} ({today_pct:+.1f}%){floor_str}{target_str}"
             )
+        if next_exit:
+            lines.append(f"\n🎯 *Next profit exit:* `{next_exit}` — needs +{best_gap:.1f}% more to hit target")
     else:
         lines.append("\n_No open positions._")
 
