@@ -116,6 +116,16 @@ def _sell_call(symbol: str, cfg: dict, contracts: int, price: float) -> dict | N
 def start_wheel(symbol: str, contracts: int = 1) -> dict:
     """Kick off The Wheel by selling the first cash-secured put."""
     cfg = _settings()
+    # The enabled flag must gate OPENING too, not just check_and_manage(). Without
+    # this the AI decision layer could still open wheels while the management loop
+    # was switched off, leaving a short option with nothing to profit-close, roll,
+    # or handle assignment for it — and wheel has no stop-loss to fall back on.
+    # Happened for real: BWA 2026-08-21, opened with enabled=false and immediately
+    # orphaned. Any caller wanting a manual wheel must flip wheel.enabled first.
+    if not cfg.get("enabled", False):
+        log.warning(f"[{symbol}] Wheel is disabled in settings — refusing to open a position that nothing would manage")
+        return {}
+
     ws = _sell_put(symbol, cfg, contracts)
     if ws is None:
         return {}

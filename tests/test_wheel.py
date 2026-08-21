@@ -330,3 +330,48 @@ class TestCheckManageExceptions:
             result = check_and_manage()  # must not raise
 
         assert result["actions"] == []
+
+
+# ── start_wheel: respects the enabled flag ───────────────────────────────────
+
+class TestStartWheelDisabled:
+    """start_wheel must refuse to open when wheel.enabled is false.
+
+    Regression test for BWA 2026-08-21: the flag gated check_and_manage() but not
+    start_wheel(), so the AI opened a short put that nothing would ever
+    profit-close, roll, or manage through assignment.
+    """
+
+    @patch("strategies.wheel.find_option_contract")
+    @patch("strategies.wheel.submit_option_order")
+    @patch("strategies.wheel.get_latest_price", return_value=100.0)
+    @patch("strategies.wheel._settings", return_value={**WHEEL_SETTINGS, "enabled": False})
+    def test_returns_empty_and_submits_nothing(self, mock_settings, mock_price, mock_submit, mock_contract):
+        from strategies.wheel import start_wheel
+        assert start_wheel("AAPL", contracts=1) == {}
+        mock_submit.assert_not_called()
+        mock_contract.assert_not_called()
+
+    @patch("strategies.wheel.save_state")
+    @patch("strategies.wheel.load_state", side_effect=_base_state)
+    @patch("strategies.wheel.submit_option_order")
+    @patch("strategies.wheel._settings", return_value={**WHEEL_SETTINGS, "enabled": False})
+    def test_does_not_write_state(self, mock_settings, mock_submit, mock_load, mock_save):
+        from strategies.wheel import start_wheel
+        start_wheel("AAPL", contracts=1)
+        mock_save.assert_not_called()
+
+    @patch("strategies.wheel.find_option_contract", return_value=FAKE_PUT_CONTRACT)
+    @patch("strategies.wheel.save_state")
+    @patch("strategies.wheel.load_state", side_effect=_base_state)
+    @patch("strategies.wheel.log_trade")
+    @patch("strategies.wheel.submit_option_order")
+    @patch("strategies.wheel.get_option_mid_price", return_value=1.50)
+    @patch("strategies.wheel.get_latest_price", return_value=100.0)
+    @patch("strategies.wheel._settings", return_value=WHEEL_SETTINGS)
+    def test_enabled_still_opens_normally(self, mock_settings, mock_price, mock_premium, mock_submit,
+                                          mock_log, mock_load, mock_save, mock_contract):
+        """The guard must not over-block: enabled=True still opens."""
+        from strategies.wheel import start_wheel
+        start_wheel("AAPL", contracts=1)
+        mock_submit.assert_called_once()
