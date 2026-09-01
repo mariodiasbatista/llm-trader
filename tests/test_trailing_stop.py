@@ -433,3 +433,126 @@ class TestStopOutCooldownRecording:
             check_and_update()
         saved = mock_save.call_args[0][0]
         assert saved.get("stopped_out", {}).get("MSFT") is None
+
+
+# ── unconfirmed close orders must not create phantom trades or orphans ───────
+
+class TestUnconfirmedCloseOrder:
+    """Regression for HWKN 2026-09-01: a market SELL submitted at 15:59:57 ET
+    EXPIRED unfilled at the bell, but the old code logged a TAKE_PROFIT that
+    never happened and deleted the position from state — leaving stock still
+    held with no floor, no target and nothing managing it."""
+
+    def _order(self, filled_avg_price=None, status="ACCEPTED", oid="abc12345-0000"):
+        o = MagicMock()
+        o.id = oid
+        o.filled_avg_price = filled_avg_price
+        o.status = status
+        return o
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.log_trade")
+    @patch("strategies.trailing_stop.close_position")
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings", return_value=SETTINGS["trailing_stop"])
+    def test_unfilled_close_does_not_log_trade_or_drop_position(
+        self, mock_settings, mock_positions, mock_close, mock_log_trade, mock_save
+    ):
+        mock_positions.return_value = [_make_position("HWKN", 200, 100)]  # +100%, way past TP
+        mock_close.return_value = self._order(filled_avg_price=None, status="EXPIRED")
+        state = _state_with("HWKN", floor=90, hwm=100, entry=100)
+        with patch("strategies.trailing_stop.load_state", return_value=state):
+            from strategies.trailing_stop import check_and_update
+            check_and_update()
+
+        mock_log_trade.assert_not_called(), "must not journal a trade that never filled"
+        assert "HWKN" in state["positions"], "position must stay tracked when the sell didn't fill"
+        assert "pending_close" in state["positions"]["HWKN"]
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.log_trade")
+    @patch("strategies.trailing_stop.close_position")
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings", return_value=SETTINGS["trailing_stop"])
+    def test_filled_close_still_logs_and_drops(
+        self, mock_settings, mock_positions, mock_close, mock_log_trade, mock_save
+    ):
+        """The guard must not over-block: a confirmed fill behaves as before."""
+        mock_positions.return_value = [_make_position("HWKN", 200, 100)]
+        mock_close.return_value = self._order(filled_avg_price=199.5, status="FILLED")
+        state = _state_with("HWKN", floor=90, hwm=100, entry=100)
+        with patch("strategies.trailing_stop.load_state", return_value=state):
+            from strategies.trailing_stop import check_and_update
+            check_and_update()
+
+        mock_log_trade.assert_called_once()
+        assert state["positions"].get("HWKN") is None
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.log_trade")
+    @patch("strategies.trailing_stop.close_position")
+    @patch("strategies.trailing_stop.get_order")
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings", return_value=SETTINGS["trailing_stop"])
+    def test_pending_close_that_filled_is_settled_next_cycle(
+        self, mock_settings, mock_positions, mock_get_order, mock_close, mock_log_trade, mock_save
+    ):
+        mock_positions.return_value = [_make_position("HWKN", 200, 100)]
+        mock_get_order.return_value = self._order(filled_avg_price=124.91, status="FILLED")
+        state = _state_with("HWKN", floor=90, hwm=100, entry=100)
+        state["positions"]["HWKN"]["pending_close"] = {
+            "order_id": "abc12345-0000", "action": "TAKE_PROFIT",
+            "notes": "gain=4.8% target=4.6%", "qty": 93, "submitted": "2026-09-01T20:00:12",
+        }
+        with patch("strategies.trailing_stop.load_state", return_value=state):
+            from strategies.trailing_stop import check_and_update
+            check_and_update()
+
+        mock_log_trade.assert_called_once()
+        assert mock_log_trade.call_args[0][3] == 124.91, "must journal the REAL fill price"
+        assert state["positions"].get("HWKN") is None
+        mock_close.assert_not_called(), "must not submit a second sell"
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.close_position")
+    @patch("strategies.trailing_stop.get_order")
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings", return_value=SETTINGS["trailing_stop"])
+    def test_still_working_order_does_not_submit_duplicate(
+        self, mock_settings, mock_positions, mock_get_order, mock_close, mock_save
+    ):
+        mock_positions.return_value = [_make_position("HWKN", 200, 100)]
+        mock_get_order.return_value = self._order(filled_avg_price=None, status="ACCEPTED")
+        state = _state_with("HWKN", floor=90, hwm=100, entry=100)
+        state["positions"]["HWKN"]["pending_close"] = {
+            "order_id": "abc12345-0000", "action": "TAKE_PROFIT",
+            "notes": "n", "qty": 93, "submitted": "2026-09-01T20:00:12",
+        }
+        with patch("strategies.trailing_stop.load_state", return_value=state):
+            from strategies.trailing_stop import check_and_update
+            check_and_update()
+
+        mock_close.assert_not_called(), "a live order must never be duplicated"
+        assert "pending_close" in state["positions"]["HWKN"]
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.close_position")
+    @patch("strategies.trailing_stop.get_order")
+    @patch("strategies.trailing_stop.get_positions")
+    @patch("strategies.trailing_stop._settings", return_value=SETTINGS["trailing_stop"])
+    def test_expired_order_clears_marker_and_retries(
+        self, mock_settings, mock_positions, mock_get_order, mock_close, mock_save
+    ):
+        mock_positions.return_value = [_make_position("HWKN", 200, 100)]
+        mock_get_order.return_value = self._order(filled_avg_price=None, status="EXPIRED")
+        mock_close.return_value = self._order(filled_avg_price=199.0, status="FILLED", oid="new00000-0000")
+        state = _state_with("HWKN", floor=90, hwm=100, entry=100)
+        state["positions"]["HWKN"]["pending_close"] = {
+            "order_id": "abc12345-0000", "action": "TAKE_PROFIT",
+            "notes": "n", "qty": 93, "submitted": "2026-09-01T20:00:12",
+        }
+        with patch("strategies.trailing_stop.load_state", return_value=state):
+            from strategies.trailing_stop import check_and_update
+            check_and_update()
+
+        mock_close.assert_called_once(), "an expired order should be retried"

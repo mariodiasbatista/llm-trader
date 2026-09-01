@@ -169,6 +169,19 @@ def get_open_orders():
     return _trading_client().get_orders(req)
 
 
+def get_order(order_id: str):
+    """Look up a single order by id. Returns None if it can't be fetched.
+
+    Used to settle a close order whose fill wasn't confirmed while we were
+    waiting — the order may have filled, expired, or been rejected since.
+    """
+    try:
+        return _trading_client().get_order_by_id(order_id)
+    except Exception as e:
+        _debug(f"[alpaca] get_order({order_id}) failed: {e}")
+        return None
+
+
 # ── Options (Wheel strategy) ───────────────────────────────────────────────
 
 

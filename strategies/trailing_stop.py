@@ -12,7 +12,7 @@ from pathlib import Path
 
 from alpaca.trading.enums import AssetClass
 
-from core.alpaca import get_positions, get_latest_price, close_position, market_buy, get_account, get_bars_range
+from core.alpaca import get_positions, get_latest_price, close_position, market_buy, get_account, get_bars_range, get_order
 from core.logger import load_state, save_state, log_trade, log, state_lock
 from core.notifier import is_configured as telegram_configured, send_insufficient_funds_alert
 from strategies.exit_levels import mfe_distribution, resolve_take_profit
@@ -201,6 +201,33 @@ def check_and_update() -> dict:
                 state["positions"][symbol] = {"entry_price": entry}
             ps = state["positions"][symbol]
 
+            # Settle any close order left unresolved by a previous cycle before
+            # evaluating again — otherwise we'd submit a second sell on top of a
+            # still-live one and risk going short.
+            pending = ps.get("pending_close")
+            if pending:
+                order = get_order(pending["order_id"])
+                oid = pending["order_id"][:8]
+                if order is None:
+                    log.warning(f"[{symbol}] Pending close {oid} could not be fetched — leaving it pending")
+                    continue
+                filled_price = order.filled_avg_price
+                if filled_price is not None:
+                    log_trade(pending["action"], symbol, pending["qty"], float(filled_price), pending["notes"])
+                    summary["stopped_out"].append(symbol)
+                    del state["positions"][symbol]
+                    if pending["action"] == "STOP_SELL":
+                        state.setdefault("stopped_out", {})[symbol] = datetime.now().strftime("%Y-%m-%d")
+                    log.info(f"[{symbol}] Pending close {oid} filled @ ${float(filled_price):.2f} — recorded")
+                    continue
+                if str(order.status).split(".")[-1].upper() in ("NEW", "ACCEPTED", "PENDING_NEW", "PARTIALLY_FILLED", "HELD"):
+                    log.info(f"[{symbol}] Close order {oid} still working (status={order.status}) — skipping this cycle")
+                    continue
+                # Terminal without a fill (expired at the bell, cancelled, rejected):
+                # clear the marker and fall through so normal evaluation can retry.
+                log.warning(f"[{symbol}] Close order {oid} ended unfilled (status={order.status}) — retrying")
+                ps.pop("pending_close", None)
+
             pos_cfg = _position_cfg(symbol, cfg, ps)
             events = evaluate_position(pos_cfg, ps, price, entry)
 
@@ -242,16 +269,36 @@ def check_and_update() -> dict:
                     log.warning(f"[{symbol}] STOP TRIGGERED @ ${price:.2f} (floor ${ev['floor']:.2f})")
                 try:
                     close_order = close_position(symbol)
-                    fill_price = float(close_order.filled_avg_price) if close_order.filled_avg_price is not None else price
                     notes = (
                         f"gain={ev['gain_pct']:.1%} target={pos_cfg.get('take_profit_pct', 0):.1%}"
                         if action == "TAKE_PROFIT"
                         else f"floor={ev['floor']:.2f}"
                     )
-                    log_trade(
-                        action, symbol, qty, fill_price,
-                        notes + ("" if close_order.filled_avg_price is not None else " unconfirmed_fill=true")
-                    )
+                    if close_order.filled_avg_price is None:
+                        # Submitted but not filled yet — do NOT log a trade or drop
+                        # the position. A market order submitted near the close
+                        # EXPIRES unfilled at the bell (seen live: HWKN 2026-09-01,
+                        # submitted 15:59:57 ET, expired with filled_qty=0). The old
+                        # code logged a TAKE_PROFIT that never happened and deleted
+                        # the position from state, leaving stock still held but
+                        # untracked — no floor, no target, nothing managing it.
+                        # Record the order id instead and settle it next cycle.
+                        ps["pending_close"] = {
+                            "order_id": str(close_order.id),
+                            "action": action,
+                            "notes": notes,
+                            "qty": qty,
+                            "submitted": datetime.now().isoformat(),
+                        }
+                        log.warning(
+                            f"[{symbol}] Close order {str(close_order.id)[:8]} not filled yet "
+                            f"(status={close_order.status}) — position stays tracked, will settle next cycle"
+                        )
+                        closed = True  # don't ladder-buy into a position we're exiting
+                        break
+
+                    fill_price = float(close_order.filled_avg_price)
+                    log_trade(action, symbol, qty, fill_price, notes)
                     summary["stopped_out"].append(symbol)
                     del state["positions"][symbol]
                     if action == "STOP_SELL":
