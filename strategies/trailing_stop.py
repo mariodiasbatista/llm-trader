@@ -169,6 +169,44 @@ def evaluate_position(cfg: dict, ps: dict, price: float, entry: float) -> list[d
     return events
 
 
+def _settle_orphaned_pending_closes(state: dict, positions, summary: dict) -> None:
+    """
+    Settle pending closes for symbols that are NO LONGER held.
+
+    The per-position loop below only visits symbols Alpaca still reports, so a
+    close order that fills between cycles makes its symbol disappear from that
+    loop — leaving its pending_close marker unresolved forever and the sale
+    missing from trades.log (seen live: HWKN 2026-09-02, filled @ $122.60 and
+    never journaled). Those symbols have to be swept separately, before the
+    main loop, using the broker's order record as the source of truth.
+    """
+    live = {p.symbol for p in positions}
+    for symbol in [s for s in list(state.get("positions", {})) if s not in live]:
+        ps = state["positions"][symbol]
+        pending = ps.get("pending_close")
+        if not pending:
+            continue  # untracked-but-not-pending: left alone, reconcile_state.py's job
+        order = get_order(pending["order_id"])
+        oid = pending["order_id"][:8]
+        if order is None:
+            log.warning(f"[{symbol}] Gone from portfolio, pending close {oid} unreadable — leaving for next cycle")
+            continue
+        if order.filled_avg_price is not None:
+            log_trade(pending["action"], symbol, pending["qty"], float(order.filled_avg_price), pending["notes"])
+            summary["stopped_out"].append(symbol)
+            del state["positions"][symbol]
+            if pending["action"] == "STOP_SELL":
+                state.setdefault("stopped_out", {})[symbol] = datetime.now().strftime("%Y-%m-%d")
+            log.info(f"[{symbol}] Position closed while untracked — settled {oid} @ ${float(order.filled_avg_price):.2f}")
+        else:
+            # No longer held yet the order shows no fill — genuinely odd (manual
+            # close? partial?). Don't invent a price; surface it for a human.
+            log.error(
+                f"[{symbol}] Gone from portfolio but close order {oid} shows no fill "
+                f"(status={order.status}) — NOT journaled, needs manual reconciliation"
+            )
+
+
 def check_and_update() -> dict:
     """
     Evaluate all open positions against trailing stop rules.
@@ -181,6 +219,7 @@ def check_and_update() -> dict:
 
     with state_lock():
         state = load_state()
+        _settle_orphaned_pending_closes(state, positions, summary)
 
         for pos in positions:
             if pos.asset_class != AssetClass.US_EQUITY:

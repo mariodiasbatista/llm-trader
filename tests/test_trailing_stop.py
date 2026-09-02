@@ -556,3 +556,87 @@ class TestUnconfirmedCloseOrder:
             check_and_update()
 
         mock_close.assert_called_once(), "an expired order should be retried"
+
+
+# ── pending closes for symbols no longer held must still be settled ──────────
+
+class TestOrphanedPendingClose:
+    """Regression for HWKN 2026-09-02: the close order filled between cycles, so
+    the symbol vanished from get_positions() and the per-position loop never
+    visited it — its pending_close was never settled and the real sale never
+    reached trades.log."""
+
+    def _order(self, filled_avg_price=None, status="FILLED"):
+        o = MagicMock()
+        o.id = "a8a8e1c8-0000"
+        o.filled_avg_price = filled_avg_price
+        o.status = status
+        return o
+
+    def _state_pending(self):
+        return {
+            "positions": {"HWKN": {
+                "entry_price": 119.15, "high_water_mark": 126.51, "stop_floor": 107.53,
+                "ladder_triggered": [], "profit_stop_active": True,
+                "pending_close": {"order_id": "a8a8e1c8-0000", "action": "TAKE_PROFIT",
+                                  "notes": "gain=6.2% target=4.6%", "qty": 93.0,
+                                  "submitted": "2026-09-02T13:35:37"},
+            }},
+            "wheel": {}, "copied_trades": [],
+        }
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.log_trade")
+    @patch("strategies.trailing_stop.get_order")
+    @patch("strategies.trailing_stop.get_positions", return_value=[])  # no longer held
+    @patch("strategies.trailing_stop._settings", return_value=SETTINGS["trailing_stop"])
+    def test_settles_sale_that_completed_between_cycles(
+        self, mock_settings, mock_positions, mock_get_order, mock_log_trade, mock_save
+    ):
+        mock_get_order.return_value = self._order(filled_avg_price=122.600108)
+        state = self._state_pending()
+        with patch("strategies.trailing_stop.load_state", return_value=state):
+            from strategies.trailing_stop import check_and_update
+            check_and_update()
+
+        mock_log_trade.assert_called_once()
+        assert mock_log_trade.call_args[0][3] == 122.600108, "must journal the real broker fill"
+        assert "HWKN" not in state["positions"], "settled position must be dropped from state"
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.log_trade")
+    @patch("strategies.trailing_stop.get_order")
+    @patch("strategies.trailing_stop.get_positions", return_value=[])
+    @patch("strategies.trailing_stop._settings", return_value=SETTINGS["trailing_stop"])
+    def test_gone_but_unfilled_is_surfaced_not_invented(
+        self, mock_settings, mock_positions, mock_get_order, mock_log_trade, mock_save
+    ):
+        """Position gone yet order shows no fill — must NOT fabricate a price."""
+        mock_get_order.return_value = self._order(filled_avg_price=None, status="CANCELED")
+        state = self._state_pending()
+        with patch("strategies.trailing_stop.load_state", return_value=state):
+            from strategies.trailing_stop import check_and_update
+            check_and_update()
+
+        mock_log_trade.assert_not_called()
+        assert "HWKN" in state["positions"], "keep it visible until a human reconciles"
+
+    @patch("strategies.trailing_stop.save_state")
+    @patch("strategies.trailing_stop.log_trade")
+    @patch("strategies.trailing_stop.get_order")
+    @patch("strategies.trailing_stop.get_positions", return_value=[])
+    @patch("strategies.trailing_stop._settings", return_value=SETTINGS["trailing_stop"])
+    def test_untracked_without_pending_marker_is_left_alone(
+        self, mock_settings, mock_positions, mock_get_order, mock_log_trade, mock_save
+    ):
+        """A stale state entry with no pending_close isn't this function's business."""
+        state = {"positions": {"OLD": {"entry_price": 10.0, "high_water_mark": 11.0,
+                                       "stop_floor": 9.0, "ladder_triggered": []}},
+                 "wheel": {}, "copied_trades": {}}
+        with patch("strategies.trailing_stop.load_state", return_value=state):
+            from strategies.trailing_stop import check_and_update
+            check_and_update()
+
+        mock_log_trade.assert_not_called()
+        mock_get_order.assert_not_called()
+        assert "OLD" in state["positions"]
