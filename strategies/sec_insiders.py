@@ -388,6 +388,8 @@ def fetch_insider_buys(
 
     signals = []
     processed = 0
+    rejected_value = 0   # counted for the run summary; each is logged individually above
+    rejected_role = 0
 
     # Was a fully serial loop (one filing fetched at a time, ~0.11s apart) —
     # with up to 400 filings that routinely exceeded the 5-minute analyze
@@ -413,14 +415,33 @@ def fetch_insider_buys(
 
             txns = _parse_form4(xml_text, filing_date)
             for t in txns:
+                # Rejections here were previously silent, which made these two
+                # filters unmeasurable: a filter that discards signals without
+                # a record will always look justified on the signals it lets
+                # through. Log every rejection with the fields needed to replay
+                # it later (ticker, date, role, value) so the counterfactual
+                # "what would these have done?" becomes answerable.
                 if t["_transaction_value"] < min_transaction_value:
+                    rejected_value += 1
+                    log.info(
+                        f"[{t['asset']['ticker']}] REJECTED_PREFILTER reason=min_transaction_value "
+                        f"value=${t['_transaction_value']:,.0f} threshold=${min_transaction_value:,.0f} "
+                        f"role={t.get('_insider_role','?')} txDate={t.get('txDate','?')}"
+                    )
                     continue
                 if require_high_conviction and not t["_high_conviction"]:
+                    rejected_role += 1
+                    log.info(
+                        f"[{t['asset']['ticker']}] REJECTED_PREFILTER reason=require_high_conviction "
+                        f"role={t.get('_insider_role','?')} value=${t['_transaction_value']:,.0f} "
+                        f"txDate={t.get('txDate','?')}"
+                    )
                     continue
                 signals.append(t)
 
     log.info(
         f"SEC EDGAR: {len(signals)} insider buy signals "
-        f"≥ ${min_transaction_value:,.0f} from {processed} filings"
+        f"≥ ${min_transaction_value:,.0f} from {processed} filings "
+        f"| pre-filter rejections: {rejected_value} on value, {rejected_role} on role"
     )
     return signals

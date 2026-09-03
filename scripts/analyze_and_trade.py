@@ -120,7 +120,7 @@ def main():
         # Form 4 filing lag is max 2 business days — signals days+3 or older are stale.
         pub_date = trade.get("publishedDate") or trade.get("txDate", "")
         if _days_since(pub_date) >= args.days + 3:
-            log.info(f"[{ticker}] Signal too old (pub={pub_date}) — skipping")
+            log.info(f"[{ticker}] REJECTED_PREFILTER reason=publish_date_too_old pub={pub_date}")
             _mark_processed(trade_key)
             continue
 
@@ -129,7 +129,7 @@ def main():
             tx_date = trade.get("txDate", "")
             tx_age = _days_since(tx_date)
             if tx_age > max_txdate_age_days:
-                log.info(f"[{ticker}] Trade too old (txDate={tx_date}, {tx_age}d) — skipping")
+                log.info(f"[{ticker}] REJECTED_PREFILTER reason=max_txdate_age txDate={tx_date} age={tx_age}d")
                 _mark_processed(trade_key)
                 continue
 
@@ -138,8 +138,8 @@ def main():
             days_since_stop = _days_since(stopped_out_dates[ticker])
             if days_since_stop < stop_cooldown_days:
                 log.info(
-                    f"[{ticker}] Cooldown active — stopped {days_since_stop}d ago, "
-                    f"skipping for {stop_cooldown_days - days_since_stop}d more"
+                    f"[{ticker}] REJECTED_PREFILTER reason=stop_cooldown "
+                    f"stopped={days_since_stop}d_ago remaining={stop_cooldown_days - days_since_stop}d"
                 )
                 continue
 
@@ -149,7 +149,7 @@ def main():
         # instead of each independently passing the check.
         if ticker in existing_tickers:
             if not size_up:
-                log.info(f"[{ticker}] Already in portfolio — size_up=false, skipping")
+                log.info(f"[{ticker}] REJECTED_PREFILTER reason=size_up_false — already in portfolio")
                 continue
         if max_position_usd is not None and position_value.get(ticker, 0) >= max_position_usd:
             log.info(
@@ -168,7 +168,7 @@ def main():
         # sub-$20 micro-caps — a price floor was the single largest lever the
         # parameter sweep found for improving realized P&L.
         if min_entry_price > 0 and price < min_entry_price:
-            log.info(f"[{ticker}] Price ${price:.2f} below min_entry_price ${min_entry_price:.2f} — skipping")
+            log.info(f"[{ticker}] REJECTED_PREFILTER reason=min_entry_price price=${price:.2f} threshold=${min_entry_price:.2f}")
             _mark_processed(trade_key)
             continue
 
