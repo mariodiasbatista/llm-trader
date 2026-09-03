@@ -1,12 +1,12 @@
 # llm-trader
 
-An AI-powered trading bot connecting **Claude Opus 4.7** to **Alpaca Markets** for automated paper trading.
+An AI-powered trading bot connecting **Claude (claude-sonnet-4-6)** to **Alpaca Markets** for automated paper trading.
 
 ## How It Works
 
 1. **Signal Source** — Fetches [SEC EDGAR Form 4](https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany) filings: open-market stock purchases by corporate insiders (CEOs, CFOs, directors, and other officers). Insiders must file within 2 business days of the trade, so signals are near-real-time — a big upgrade over the 31–45 day publication lag of politician disclosure trackers. Filters by transaction value (≥ $100K default) and high-conviction roles.
 
-2. **AI Decision** — Claude Opus 4.7 analyzes each signal and decides:
+2. **AI Decision** — `claude-sonnet-4-6` analyzes each signal and decides:
    - `TRAILING_STOP` — buy shares + protect with a trailing stop floor (for momentum stocks: tech, semiconductors, defense)
    - `WHEEL` — sell cash-secured puts for premium income (for stable blue-chips with liquid options)
    - `SKIP` — pass on the signal (stale, illiquid, or low conviction)
@@ -67,7 +67,7 @@ python main.py scheduler
 
 ```
 agents/
-  claude_advisor.py        ← Claude Opus 4.7 strategy selector (TRAILING_STOP / WHEEL / SKIP)
+  claude_advisor.py        ← claude-sonnet-4-6 strategy selector (TRAILING_STOP / WHEEL / SKIP)
 strategies/
   trailing_stop.py         ← Trailing floor + laddered buys
   exit_levels.py           ← Per-stock take-profit levels from realized price history (shared with backtest)
@@ -92,7 +92,7 @@ backtest/
   sweep.py                  ← coordinate-descent parameter sweep, scored on worst-month P&L (+ alpha)
   edge_search.py             ← replays SEC EDGAR insider signals over a long window, bucketed by role/value/conviction
   signals.py, trend.py, buckets.py, wheel_replay.py, report.py  ← supporting utilities
-tests/                     ← 355 unit tests (pytest)
+tests/                     ← 366 unit tests (pytest)
 config/settings.json       ← All tunable parameters
 ```
 
@@ -121,11 +121,13 @@ Output: realized P&L, unrealized P&L, ROI %, and a head-to-head comparison betwe
 - Laddered buys: adds 10 shares at -20% drop, 20 shares at -30%
 - Auto-sells entire position if price hits the floor
 
-### Wheel (Phase 4 — options approval required)
+### Wheel (Phase 4 — **currently disabled**)
 - Stage 1: Sell cash-secured put 5% below current price → collect premium
 - Stage 2: If assigned, sell covered call 5% above current price → collect premium
 - Close contracts at 50% profit target
 - Repeats indefinitely (Stage 1 → 2 → 1 → ...)
+
+`wheel.enabled` is `false` and `start_wheel()` refuses to open while it is, so a `WHEEL` verdict currently results in no trade. Before re-enabling: it has **no stop-loss** (only exits are profit-close or assignment), uses flat 5% OTM strikes for every stock rather than per-stock levels, has no assignment-risk sizing against available cash, and cannot be backtested — this account has no OPRA agreement, so `backtest/wheel_replay.py` estimates premiums via Black-Scholes instead of using real option prices.
 
 ## Backtesting & Strategy Analysis
 
@@ -168,7 +170,7 @@ EOF
 .venv/bin/pytest tests/test_alpaca_connection.py -v
 ```
 
-355 unit tests, all mocked — no API calls in CI.
+366 unit tests, all mocked — no API calls in CI.
 
 ## Configuration
 
@@ -246,4 +248,4 @@ This persists across reboots. Verify with `free -h`.
 
 - Python 3.10+
 - Alpaca Paper Trading account (free)
-- Anthropic API key (Claude Opus 4.7)
+- Anthropic API key (`claude-sonnet-4-6`)
