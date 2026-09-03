@@ -61,6 +61,33 @@ LEGACY_SKIP_RE = re.compile(
 MIN_FORWARD_BARS = 2
 
 
+def classify_skip_condition(text: str) -> str:
+    """Map the AI's free-text skip reason onto a condition.
+
+    Worth separating from the filter *name*: a `claude_skip` tells you the AI
+    rejected it, not why. Measured 2026-09-03, the two most common reasons —
+    staleness and small-cap/price aversion — are conditions its prompt never
+    lists, i.e. rules it invented, and both rejected profitable signals.
+    """
+    s = (text or "").lower()
+    if "days old" in s or "stale" in s:
+        return "stale [self-invented]"
+    if "gapped" in s or "already run" in s or "already up" in s or "since the filing" in s:
+        return "already gapped >10%"
+    if any(w in s for w in ("illiquid", "otc", "thin", "low volume", "liquidity")):
+        return "illiquid / OTC"
+    if "buying power" in s or "insufficient capital" in s:
+        return "buying power too low"
+    if "relative to" in s and ("compensation" in s or "salary" in s):
+        return "trivial vs compensation"
+    if any(w in s for w in ("headwind", "regulatory", "macro", "tariff", "sector", "cyclical")):
+        return "sector headwinds"
+    if any(w in s for w in ("micro-cap", "small-cap", "penny", "speculative", "volatile",
+                            "trades at $", "per share", "biotech", "clinical")):
+        return "small-cap / price [self-invented]"
+    return "other"
+
+
 def parse_rejections(since: date | None) -> dict:
     """{(ticker, date): reason} — deduped, because the scanner re-logs the same
     signal every run (~13x/day)."""
@@ -75,14 +102,14 @@ def parse_rejections(since: date | None) -> dict:
                 d = date.fromisoformat(m.group(1))
                 if since and d < since:
                     continue
-                out.setdefault((m.group(2), d), m.group(4))
+                out.setdefault((m.group(2), d), (m.group(4), m.group(5) or ""))
                 continue
             m = LEGACY_SKIP_RE.match(line)
             if m:
                 d = date.fromisoformat(m.group(1))
                 if since and d < since:
                     continue
-                out.setdefault((m.group(2), d), "claude_skip_legacy")
+                out.setdefault((m.group(2), d), ("claude_skip", m.group(3)))
     return out
 
 
@@ -223,7 +250,8 @@ def main():
     summarize("BOTH (no filtering at all)", took + passed, 1)
 
     by_reason = defaultdict(list)
-    reason_of = {(t, d): r for (t, d), r in rejections.items()}
+    reason_of = {k: v[0] for k, v in rejections.items()}
+    text_of   = {k: v[1] for k, v in rejections.items()}
     for r in passed:
         by_reason[reason_of.get((r["ticker"], r["date"]), "?")].append(r)
 
@@ -231,6 +259,33 @@ def main():
         print("\nRejected, broken down by which filter stopped it:")
         for reason, recs in sorted(by_reason.items(), key=lambda x: -len(x[1])):
             summarize(f"  {reason}", recs, args.min_sample)
+
+    # Break the AI's skips down by the condition it cited, not just "claude_skip"
+    ai = [r for r in passed if reason_of.get((r["ticker"], r["date"]), "").startswith("claude_skip")]
+    if ai:
+        by_cond = defaultdict(list)
+        for r in ai:
+            by_cond[classify_skip_condition(text_of.get((r["ticker"], r["date"]), ""))].append(r)
+        print("\nAI skips, by the condition Claude actually cited:")
+        for cond, recs in sorted(by_cond.items(), key=lambda x: -len(x[1])):
+            summarize(f"  {cond}", recs, args.min_sample)
+
+    # Per-filter verdict: a filter earns its place only if what it REJECTS has
+    # lower alpha than what we KEPT. Anything else is discarding profit.
+    took_alpha = summarize_alpha([r["alpha"] for r in took if r["alpha"] is not None])["avg_alpha_pct"]
+    if took_alpha is not None and by_reason:
+        print(f"\nVERDICT — kept trades average {took_alpha:+.2f}% alpha. A filter is worth keeping")
+        print("only if the signals it rejected did WORSE than that:")
+        for reason, recs in sorted(by_reason.items(), key=lambda x: -len(x[1])):
+            if len(recs) < args.min_sample:
+                continue
+            a = summarize_alpha([r["alpha"] for r in recs if r["alpha"] is not None])["avg_alpha_pct"]
+            if a is None:
+                continue
+            gap = a - took_alpha
+            verdict = "JUSTIFIED" if gap < 0 else "COSTING ALPHA"
+            print(f"  {reason:34} rejected alpha {a:+6.2f}%  vs kept {took_alpha:+6.2f}%  "
+                  f"→ {gap:+6.2f}pp  {verdict}")
 
     good = [r for r in passed if (r["alpha"] or 0) > 0]
     if good:

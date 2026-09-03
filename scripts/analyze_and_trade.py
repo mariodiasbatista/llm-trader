@@ -244,7 +244,11 @@ def main():
             log.info(
                 f"[{ticker}] REJECTED_AI reason=claude_skip confidence={confidence}% "
                 f"role={insider_role} value=${tx_value:,.0f} price=${price:.2f} "
-                f"age={_days_since(trade.get('txDate', ''))}d | {reasoning[:160]}"
+                # Full reasoning, not a 160-char snippet: the *stated condition* is
+                # what makes a skip classifiable later (stale? small-cap? illiquid?),
+                # and Claude often gives it mid-sentence. Measured 2026-09-03: 41 of
+                # 58 skips cited conditions that aren't in its prompt at all.
+                f"age={_days_since(trade.get('txDate', ''))}d | {reasoning[:400]}"
             )
             results.append(result)
             # Do NOT mark processed — re-evaluate next cycle while signal is still fresh.
