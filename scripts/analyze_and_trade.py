@@ -235,7 +235,17 @@ def main():
         print(f"  Risk       : {key_risk}")
 
         if strategy == "SKIP":
-            log.info(f"[{ticker}] SKIP — {reasoning[:80]}")
+            # Logged with the same fields as the pre-filter rejections so the whole
+            # funnel is analysable from one grep. Note there is NO confidence
+            # threshold anywhere — a SKIP at 80% confidence and one at 20% are
+            # treated identically; confidence is recorded, never acted on. Capturing
+            # it here is what makes "do low-confidence skips differ from
+            # high-confidence ones?" answerable at all.
+            log.info(
+                f"[{ticker}] REJECTED_AI reason=claude_skip confidence={confidence}% "
+                f"role={insider_role} value=${tx_value:,.0f} price=${price:.2f} "
+                f"age={_days_since(trade.get('txDate', ''))}d | {reasoning[:160]}"
+            )
             results.append(result)
             # Do NOT mark processed — re-evaluate next cycle while signal is still fresh.
             continue
