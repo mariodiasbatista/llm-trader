@@ -550,7 +550,7 @@ class TestBuildScheduleMessage:
         msg = self._msg(8)
         # Market tasks are ⬜ before open; data source check is always 🔄
         assert "⬜" in msg
-        assert "Capitol Trades Health Check" in msg
+        assert "SEC EDGAR Health Check" in msg
 
     def test_during_market_recurring_tasks_active(self):
         msg = self._msg(11)

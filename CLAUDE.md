@@ -38,6 +38,7 @@ python main.py summary                                   # End-of-day portfolio 
 python main.py reconcile-state                           # Fix state.json vs. real Alpaca positions
 python main.py scheduler                                 # Start automated scheduler (blocking)
 python scripts/insider_report.py --days 1                # Raw Form 4 signals, no AI
+python scripts/rejection_analysis.py                     # Did the filters reject profitable trades? (alpha-scored)
 
 python main.py smart-money -p "McCaul"                   # LEGACY Capitol Trades viewer (not the live signal)
 python main.py wheel AAPL --contracts 2                  # No-op while wheel.enabled is false
@@ -53,6 +54,7 @@ agents/
 core/
   alpaca.py                # Alpaca API wrapper — all buy/sell/quote calls go here
   logger.py                # Structured logging + JSON state persistence
+  notifier.py              # Telegram output + command handling (notification-only — never gates a trade)
 strategies/
   sec_insiders.py          # SEC EDGAR Form 4 fetcher — THE live signal source
   trailing_stop.py         # Trailing floor + laddered buys logic
@@ -64,10 +66,14 @@ scripts/
   strategy_performance.py  # P&L comparison report: which strategy wins?
   check_positions.py       # Portfolio snapshot
   run_trailing_stop.py     # Manual trailing stop check
-  smart_money_report.py    # Raw disclosure viewer (no AI)
+  insider_report.py        # Raw Form 4 signal viewer (no AI)
+  rejection_analysis.py    # Replays REJECTED signals — are the filters protecting us or cutting off profit?
+  reconcile_state.py       # Fix state.json vs. real Alpaca positions
+  smart_money_report.py    # Raw disclosure viewer (no AI) — LEGACY Capitol Trades
   setup_wheel.py           # Interactive wheel starter
   daily_summary.py         # EOD report
   backtest.py              # 4-scenario comparison vs. actual trade history, with Alpha% vs SPY
+  strategy_backtest.py     # Older standalone backtest — superseded by backtest/ package
   weekly_ai_review.sh       # cron entry point for the autonomous weekly strategy review
   notify_weekly.py          # Telegram summary sender for the weekly review
 scheduler/
@@ -130,6 +136,35 @@ Every AI-executed trade is logged to `logs/trades.log` with the strategy tag emb
 
 The goal is to accumulate enough trades to see which strategy Claude selects most profitably.
 
+## Rejection Tracking — measuring the entry gate
+
+Exits are settled; the open question is the **entry gate**. A filter that discards
+signals silently can never be evaluated — it always looks justified on the signals
+it let through. So every rejection is now logged with the fields needed to replay it:
+
+- `REJECTED_PREFILTER` — dropped before any AI call (price < $50, transaction date
+  > 45 days old, post-stop cooldown, per-ticker position cap), logged in
+  `scripts/analyze_and_trade.py`
+- `REJECTED_AI` — Claude returned `SKIP`, logged with confidence, role, value,
+  price, signal age and the **full** reasoning (the stated condition is what makes
+  a skip classifiable later; measured 2026-09-03, 41 of 58 skips cited conditions
+  that aren't in the prompt at all)
+
+`python scripts/rejection_analysis.py` replays those rejected signals through the
+same trailing-stop rules the live book runs and compares against the trades
+actually taken — scored in **alpha vs SPY**, not raw P&L.
+
+**Note there is no confidence threshold anywhere.** A `SKIP` at 80% confidence and
+one at 20% are treated identically; confidence is recorded, never acted on.
+
+⚠️ **Current status of the "filters cost us alpha" finding — treat as unproven.**
+The original backtest suggested Claude's SKIPs outperformed its buys (+1.67% vs
++1.02% alpha) and that buying everything beat both (+1.34%). With fresh
+out-of-sample data that gap has been **shrinking toward noise** (+0.65pp → +0.20pp
+over successive weekly reviews), and the first live `rejection_analysis.py` sample
+(24 signals) is too thin to act on — one filter carried n=20 and the AI-skip side
+was unjudged. The correct posture is to keep accumulating, not to loosen filters.
+
 ## Strategy Configuration (`config/settings.json`)
 
 | Key | Default | Meaning |
@@ -141,7 +176,11 @@ The goal is to accumulate enough trades to see which strategy Claude selects mos
 | `trailing_stop.adaptive_take_profit.keep_flat_reach_pct` | 50 | Keep the flat 12% if the stock reached it in ≥ this % of historical 20-day windows |
 | `trailing_stop.adaptive_take_profit.target_reach_probability` | 0.7 | Otherwise target the level the stock reaches this often |
 | `trailing_stop.adaptive_take_profit.lookback_days` / `horizon_days` | 400 / 20 | History window, and the holding horizon the target is measured over |
+| `trailing_stop.adaptive_take_profit.min_windows` | 40 | Below this many historical windows, history is too thin — fall back to the flat target |
+| `trailing_stop.adaptive_take_profit.tp_min` / `tp_max` | 0.03 / 0.6 | Hard clamp on the derived target |
 | `trailing_stop.ladder_buys` | +10 @-20%, +20 @-30% | Auto-buy more on dips |
+| `trailing_stop.profit_target_pct` | 0.03 | **Dormant** — see note below |
+| `trailing_stop.trailing_pct_from_profit` | 0.05 | **Dormant** — see note below |
 | `sec_insiders.min_transaction_value` | 100000 | Minimum $ value of an insider's open-market buy |
 | `sec_insiders.require_high_conviction` | true | Restrict to CEO/CFO/Director-tier roles |
 | `sec_insiders.days_lookback` / `max_filings` | 1 / 400 | Form 4 scan window and per-run filing cap |
@@ -153,6 +192,19 @@ The goal is to accumulate enough trades to see which strategy Claude selects mos
 | `wheel.enabled` | false | **Disabled and gated in `start_wheel()`** — see Wheel below |
 | `wheel.put_otm_pct` / `call_otm_pct` | 0.05 | Flat 5% OTM strikes for every stock (a known defect — not per-stock) |
 | `smart_money.enabled` | false | Legacy Capitol Trades path, superseded by `sec_insiders` |
+
+⚠️ **`profit_target_pct` / `trailing_pct_from_profit` are dormant, not live.**
+`evaluate_position()` has two modes selected by `initial_stop_pct`:
+
+- `initial_stop_pct > 0` → **classic mode** (what runs today): the floor is set at
+  entry −15% immediately and trails 15% below each new high.
+- `initial_stop_pct == 0` → **profit-target mode**: no floor at all until the
+  position gains `profit_target_pct`, after which it trails
+  `trailing_pct_from_profit` below the high.
+
+Since `initial_stop_pct` is `0.15`, those two keys are read but never applied.
+Reading `settings.json` alone gives the false impression that a 3% trigger and a
+5% trail are active — they are not.
 
 ## Scheduling
 

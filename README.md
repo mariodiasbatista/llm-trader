@@ -56,6 +56,9 @@ python main.py trailing
 # Browse raw Form 4 insider buy signals without AI
 python scripts/insider_report.py --days 1
 
+# Did the pre-filters and Claude's SKIPs reject profitable trades? (alpha-scored)
+python scripts/rejection_analysis.py
+
 # Start The Wheel manually on a specific stock
 python main.py wheel AAPL --contracts 1
 
@@ -82,6 +85,7 @@ scheduler/
 scripts/
   analyze_and_trade.py     ← Main AI pipeline
   insider_report.py        ← Raw SEC Form 4 signal preview (no AI)
+  rejection_analysis.py    ← Replays rejected signals — are the filters cutting off profit?
   strategy_performance.py  ← P&L comparison report
   backtest.py               ← 4-scenario comparison vs. actual trade history, with Alpha% vs SPY
   weekly_ai_review.sh       ← cron entry point for the autonomous weekly strategy review (see below)
@@ -243,6 +247,8 @@ This persists across reboots. Verify with `free -h`.
 - `credentials.json` is gitignored — never commit it
 - The Wheel strategy requires Level 2 options approval on Alpaca
 - Use `--dry-run` to preview Claude's decisions before any money moves
+- Telegram is **notification-only** — it reports trades, it does not gate them.
+  Trades execute as soon as Claude recommends them (see `docs/telegram_notifications.md`)
 
 ## Requirements
 

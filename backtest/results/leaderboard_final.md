@@ -1,5 +1,21 @@
 # Backtest Sweep Leaderboard
 
+> ⚠️ **Stale generated artifact — do not draw conclusions from the numbers below.**
+>
+> - **The dollar figures are wrong.** `logs/trades.log` recorded market price
+>   rather than real fills on 8 sells plus one phantom trade, overstating P&L by
+>   roughly $2,500. Fixed in `5b6758a` (2026-09-01) and the log corrected — but
+>   this report predates that, so every P&L column here is optimistic.
+> - **The config it scored no longer exists.** This sweep ran against the flat
+>   8%/8%/12% era. Live config since `b8d4f62` (2026-08-19) is a 15% stop/trail
+>   with a per-stock adaptive take-profit (`strategies/exit_levels.py`).
+> - **It has no alpha column.** Alpha-vs-SPY reporting landed later (`3140299`).
+>   Raw P&L alone cannot separate edge from market drift, and the 45 trades
+>   behind this report are all from a single bull regime.
+>
+> Kept for history only. Regenerate with `python -m backtest.sweep` before
+> relying on any ranking here.
+
 Generated 2026-07-27T16:12:53 — 300 iterations, 34 real historical positions replayed, 62 historical EDGAR signals fetched.
 
 **Fully-passing candidates found (positive P&L in every sub-period): 0**

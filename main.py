@@ -7,8 +7,8 @@ Commands:
   check           All positions with stop floors and gaps
   trailing        Run one trailing stop check cycle
   scheduler       Start the automated scheduler (blocking)
-  smart-money     Fetch recent politician trades
-  analyze         AI analysis: Capitol Trades → Claude → execute strategy
+  smart-money     Fetch recent politician trades (LEGACY — not the live signal)
+  analyze         AI analysis: SEC EDGAR Form 4 → Claude → execute strategy
   performance     Compare TRAILING_STOP vs WHEEL strategy P&L
   summary         End-of-day portfolio summary
   wheel <TICKER>  Start The Wheel on a stock manually
@@ -19,7 +19,7 @@ Examples:
   python main.py check
   python main.py trailing
   python main.py analyze
-  python main.py analyze --politicians "McCaul" "Pelosi" --days 14 --dry-run
+  python main.py analyze --days 14 --min-value 50000 --all-roles --dry-run
   python main.py performance
   python main.py smart-money --politician "McCaul" --days 30
   python main.py wheel AAPL --contracts 2

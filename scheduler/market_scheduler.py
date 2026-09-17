@@ -417,8 +417,8 @@ def _build_schedule_message() -> str:
         (_status(open_t),              f"{_fmt(market_open)}",                      "Market Open"),
         (_status(open_t, close_t),     f"{_fmt(market_open)}–{_fmt(market_close)}", f"Trailing Stop (every {trailing_min}m)"),
         (_status(open_t, close_t),     f"{_fmt(market_open)}–{_fmt(market_close)}", f"Wheel Monitor (every {wheel_min}m)"),
-        (_status(open_t, close_t),     f"{_fmt(market_open)}–{_fmt(market_close)}", f"Capitol Trades → AI Analyze (every {analyze_min}m)"),
-        ("🔄",                         "every 60m",                                 "Capitol Trades Health Check"),
+        (_status(open_t, close_t),     f"{_fmt(market_open)}–{_fmt(market_close)}", f"SEC EDGAR → AI Analyze (every {analyze_min}m)"),
+        ("🔄",                         "every 60m",                                 "SEC EDGAR Health Check"),
         (_status(close_t),             f"{_fmt(market_close)}",                     "Market Close"),
         (_status(summary_t),           f"{_fmt(summary_time)}",                     "Daily Summary"),
     ]
